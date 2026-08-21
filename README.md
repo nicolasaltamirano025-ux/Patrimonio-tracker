@@ -45,7 +45,7 @@ git push -u origin main
    | `RESEND_API_KEY` | tu API key de [resend.com](https://resend.com) |
    | `ALERT_FROM_EMAIL` | remitente verificado en Resend |
    | `ALERT_TO_EMAIL` | `nicolasaltamirano025@gmail.com` |
-4. Deploy. La Netlify Function programada (`netlify/functions/daily-alerts.js`) corre sola todos los días a las 07:00 hora CDMX (`schedule: "0 13 * * *"` en UTC) — no necesitas Cloud Scheduler aparte, Netlify Scheduled Functions ya trae su propio cron.
+4. Deploy. La Netlify Function programada (`netlify/functions/daily-alerts.js`) corre sola todos los días a las 06:00 hora CDMX (`schedule: "0 12 * * *"` en UTC) — no necesitas Cloud Scheduler aparte, Netlify Scheduled Functions ya trae su propio cron.
 
 ### Por qué Netlify Function + Resend (y no Firebase Cloud Functions)
 Firebase Cloud Functions con cron requiere el plan **Blaze** (pago por uso) solo para poder programar funciones. Netlify Scheduled Functions vienen incluidas en el plan gratuito y ya estás desplegando ahí, así que es la opción con menos piezas nuevas que aprender/pagar. Resend tiene una API mínima (un solo `fetch` a un endpoint) y un plan gratuito de sobra para ~10 correos/mes.

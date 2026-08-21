@@ -156,6 +156,6 @@ export default async () => {
 };
 
 export const config = {
-  // 07:00 hora CDMX ≈ 13:00 UTC (CDMX no observa horario de verano desde 2022)
-  schedule: '0 13 * * *',
+  // 06:00 hora CDMX = 12:00 UTC (CDMX no observa horario de verano desde 2022)
+  schedule: '0 12 * * *',
 };
