@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0B1220" />
+<title>Patrimonio Tracker</title>
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/icons/icon.svg" />
+<style>
+  :root{
+    --bg:#0B1220; --surface:#141F32; --surface-2:#1B2A44; --border:#233350;
+    --text:#EAF0FB; --muted:#8FA0C2; --green:#3DDC97; --red:#FF6B6B; --gold:#E8B84B; --blue:#5B9DFF;
+    --radius:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom);
+    -webkit-tap-highlight-color:transparent;
+  }
+  #app{max-width:520px;margin:0 auto;padding:16px 16px 96px;}
+  h1,h2,h3{margin:0 0 4px;}
+  h1{font-size:20px;}
+  h2{font-size:15px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+  p{margin:0;}
+  a{color:var(--blue);}
+  .muted{color:var(--muted);}
+  .hidden{display:none !important;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .card + .card{margin-top:12px;}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .col{display:flex;flex-direction:column;gap:4px;}
+  .stack{display:flex;flex-direction:column;gap:10px;}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--surface-2);color:var(--muted);}
+  .pill.green{background:rgba(61,220,151,.15);color:var(--green);}
+  .pill.red{background:rgba(255,107,107,.15);color:var(--red);}
+  .pill.gold{background:rgba(232,184,75,.15);color:var(--gold);}
+  .pill.blue{background:rgba(91,157,255,.15);color:var(--blue);}
+  .amount{font-size:26px;font-weight:700;letter-spacing:-.01em;}
+  .amount.sm{font-size:18px;}
+  .amount.green{color:var(--green);}
+  .amount.red{color:var(--red);}
+  button{font-family:inherit;cursor:pointer;}
+  .btn{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:14px;font-weight:600;}
+  .btn:active{transform:scale(.98);}
+  .btn.primary{background:var(--green);color:#04140C;border-color:var(--green);}
+  .btn.danger{background:transparent;color:var(--red);border-color:rgba(255,107,107,.35);}
+  .btn.ghost{background:transparent;}
+  .btn.block{width:100%;}
+  .btn.sm{padding:6px 10px;font-size:12px;}
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;}
+  input,select,textarea{
+    width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text);
+    border-radius:10px;padding:10px 12px;font-size:15px;font-family:inherit;
+  }
+  label{font-size:12px;color:var(--muted);margin-bottom:2px;display:block;}
+  .field{margin-bottom:10px;}
+  .tabs{display:flex;gap:6px;margin:16px 0;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5;}
+  .tab{flex:1;text-align:center;padding:9px 4px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);font-size:13px;font-weight:600;}
+  .tab.active{background:var(--green);color:#04140C;border-color:var(--green);}
+  .link-badge{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gold);background:rgba(232,184,75,.1);border:1px dashed rgba(232,184,75,.4);border-radius:10px;padding:8px 10px;margin-top:8px;}
+  .flow-diagram{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);flex-wrap:wrap;margin-top:8px;}
+  .flow-node{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:4px 8px;}
+  .flow-arrow{color:var(--gold);}
+  .divider{height:1px;background:var(--border);margin:12px 0;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--border);}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:50;}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:20px 20px 0 0;padding:20px 16px calc(20px + env(safe-area-inset-bottom));width:100%;max-width:520px;max-height:85vh;overflow-y:auto;}
+  .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+  .close-x{background:none;border:none;color:var(--muted);font-size:22px;line-height:1;padding:4px;}
+  .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:10px;font-size:13px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,.4);}
+  #login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+  #login-screen .card{width:100%;max-width:360px;}
+  canvas{width:100%;display:block;}
+  .empty-state{text-align:center;padding:24px 8px;color:var(--muted);font-size:13px;}
+</style>
+</head>
+<body>
+
+<div id="login-screen" class="hidden">
+  <div class="card stack">
+    <div>
+      <h1>Patrimonio Tracker</h1>
+      <p class="muted" style="font-size:13px;">Inicia sesión para ver tu patrimonio</p>
+    </div>
+    <div class="field">
+      <label>Correo</label>
+      <input id="login-email" type="email" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>Contraseña</label>
+      <input id="login-password" type="password" autocomplete="current-password" />
+    </div>
+    <button class="btn primary block" id="login-btn">Entrar</button>
+    <p id="login-error" class="muted" style="color:var(--red);font-size:12px;"></p>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="row">
+    <h1>Patrimonio Tracker</h1>
+    <button class="btn ghost sm" id="logout-btn">Salir</button>
+  </div>
+
+  <!-- ZONA A -->
+  <div class="card" id="zone-a">
+    <div class="row">
+      <span class="muted" style="font-size:12px;">PATRIMONIO NETO</span>
+      <span id="trend-pill" class="pill"></span>
+    </div>
+    <div class="amount" id="patrimonio-neto">—</div>
+    <div class="divider"></div>
+    <div class="row">
+      <div>
+        <div class="muted" style="font-size:12px;">Rendimientos</div>
+        <div class="amount sm green" id="total-rendimientos">—</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="muted" style="font-size:12px;">Deudas conocidas</div>
+        <div class="amount sm red" id="total-deudas">—</div>
+      </div>
+    </div>
+    <div id="pending-note" class="muted" style="font-size:11px;margin-top:8px;"></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="rendimientos">Rendimientos</button>
+    <button class="tab" data-tab="deudas">Deudas</button>
+    <button class="tab" data-tab="historial">Historial</button>
+  </div>
+
+  <!-- ZONA B -->
+  <div id="tab-rendimientos">
+    <div class="row" style="margin-bottom:8px;">
+      <h2>Cuentas de rendimiento</h2>
+      <button class="btn sm" id="add-rendimiento-btn">+ Cuenta</button>
+    </div>
+    <div id="rendimientos-list" class="stack"></div>
+
+    <div class="card">
+      <h2>Evolución del patrimonio</h2>
+      <canvas id="chart-canvas" height="140"></canvas>
+      <p class="muted" style="font-size:11px;margin-top:6px;">Últimos registros de patrimonio neto</p>
+    </div>
+  </div>
+
+  <!-- ZONA C -->
+  <div id="tab-deudas" class="hidden">
+    <div class="row" style="margin-bottom:8px;">
+      <h2>Deudas</h2>
+      <button class="btn sm" id="add-deuda-btn">+ Deuda</button>
+    </div>
+    <div id="deudas-list" class="stack"></div>
+  </div>
+
+  <!-- HISTORIAL -->
+  <div id="tab-historial" class="hidden">
+    <h2 style="margin-bottom:8px;">Movimientos</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>Fecha</th><th>Detalle</th><th>Cambio</th><th></th></tr></thead>
+        <tbody id="historial-body"></tbody>
+      </table>
+      <div id="historial-empty" class="empty-state hidden">Sin movimientos todavía</div>
+    </div>
+  </div>
+
+  <div id="seed-banner" class="card hidden">
+    <p style="font-size:13px;margin-bottom:10px;">La base de datos está vacía. ¿Cargar los datos iniciales de Revolut, Nu, Klar, Uala y las 7 deudas?</p>
+    <button class="btn primary block" id="seed-btn">Cargar datos iniciales</button>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<!-- Firebase (compat SDK, no build step) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+
+<script>
+/* ======================================================================
+   FIREBASE CONFIG
+   Este objeto de configuración web de Firebase NO es secreto (Google lo
+   expone así a propósito); el acceso real se protege con Database Rules
+   que exigen auth != null (ver README). Reemplaza estos valores por los
+   de tu proyecto de Firebase antes de desplegar.
+   ====================================================================== */
+const firebaseConfig = {
+  apiKey: "REEMPLAZA_apiKey",
+  authDomain: "REEMPLAZA.firebaseapp.com",
+  databaseURL: "https://REEMPLAZA-default-rtdb.firebaseio.com",
+  projectId: "REEMPLAZA",
+  storageBucket: "REEMPLAZA.appspot.com",
+  messagingSenderId: "REEMPLAZA",
+  appId: "REEMPLAZA"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.database();
+
+/* ============================== UTILS ================================ */
+const MXN = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
+const fmtMoney = (n) => (n === null || n === undefined || Number.isNaN(n)) ? '—' : MXN.format(n);
+const fmtDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+const addDays = (dateISO, n) => { const d = new Date(dateISO + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const uid = () => db.ref().push().key;
+
+function toast(msg) {
+  const root = document.getElementById('toast-root');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  root.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+/* ============================ AUTH FLOW =============================== */
+const loginScreen = document.getElementById('login-screen');
+const appRoot = document.getElementById('app');
+
+auth.onAuthStateChanged((user) => {
+  if (user) {
+    loginScreen.classList.add('hidden');
+    appRoot.classList.remove('hidden');
+    initApp();
+  } else {
+    appRoot.classList.add('hidden');
+    loginScreen.classList.remove('hidden');
+  }
+});
+
+document.getElementById('login-btn').addEventListener('click', async () => {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  try {
+    await auth.signInWithEmailAndPassword(email, password);
+  } catch (e) {
+    errEl.textContent = 'No se pudo iniciar sesión: ' + e.message;
+  }
+});
+
+document.getElementById('logout-btn').addEventListener('click', () => auth.signOut());
+
+/* ======================= RENDIMIENTOS: CÁLCULO ========================
+   Tipos soportados:
+   - simple: tasaAnual fija sobre el saldo, sin tope.
+   - escalonado_predictivo (Revolut): tasa nivel 1 hasta un tope; nivel 2
+     desconocida. La proyección de fecha-tope usa el promedio móvil del
+     interés diario REGISTRADO (historialInteres), no la tasa nominal,
+     porque así lo pidió el usuario explícitamente.
+   - declining_vinculado (Nu): tasaAnual fija; su saldo baja cuando se
+     registra el pago mensual de la deuda vinculada.
+   - grupo_colector (Klar): 3 subcuentas; el interés de 2 de ellas fluye
+     a la tercera cada día (simulado para fines de proyección; el
+     movimiento real ocurre en el banco).
+   ====================================================================== */
+
+function dailyInterestSimple(saldo, tasaAnual) {
+  return saldo * (tasaAnual / 365);
+}
+
+// Revolut: interés diario actual solo se puede calcular con certeza mientras
+// el saldo no rebasa el tope de nivel 1 (tasa nivel 2 = pendiente).
+function revolutDailyInterestNominal(cuenta) {
+  const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
+  const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
+  if (cuenta.saldo <= tope) return cuenta.saldo * (tasa1 / 365);
+  return null; // tasa nivel 2 desconocida
+}
+
+function movingAverage(historialInteres, windowDays = 7) {
+  const entries = Object.values(historialInteres || {})
+    .filter(e => typeof e.monto === 'number')
+    .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  if (!entries.length) return null;
+  const recent = entries.slice(-windowDays);
+  const sum = recent.reduce((s, e) => s + e.monto, 0);
+  return sum / recent.length;
+}
+
+// Fecha proyectada en que Revolut llega a su tope de nivel 1, con base en el
+// promedio móvil de interés diario registrado (no en la tasa nominal), y la
+// fecha de alerta = proyección - 5 días. Se recalcula en cada render.
+function revolutProjection(cuenta) {
+  const tope = cuenta.tasas?.[0]?.hasta ?? 25000;
+  const avgDaily = movingAverage(cuenta.historialInteres, 7);
+  if (cuenta.saldo >= tope) {
+    return { estado: 'en_tope', avgDaily, tope };
+  }
+  if (!avgDaily || avgDaily <= 0) {
+    return { estado: 'sin_datos', avgDaily, tope };
+  }
+  const faltante = tope - cuenta.saldo;
+  const diasRestantes = Math.ceil(faltante / avgDaily);
+  const fechaProyectada = addDays(todayISO(), diasRestantes);
+  const fechaAlerta = addDays(fechaProyectada, -5);
+  return { estado: 'proyectado', avgDaily, tope, diasRestantes, fechaProyectada, fechaAlerta };
+}
+
+function klarGroupDailyInterest(cuentas) {
+  // Interés que genera cada subcuenta hoy (antes de fluir a la colectora).
+  const out = {};
+  for (const [id, c] of Object.entries(cuentas)) out[id] = c.saldo * (c.tasaAnual / 365);
+  return out;
+}
+
+// Simula N días del grupo Klar: c1 y c2 generan interés que se deposita en
+// c3 (su propio saldo no crece), y c3 compone su propio interés + lo recibido.
+function klarProjectBalances(cuentas, days) {
+  const state = {};
+  for (const [id, c] of Object.entries(cuentas)) state[id] = c.saldo;
+  const collectorIds = Object.entries(cuentas).filter(([, c]) => c.destinoInteresId).map(([id]) => id);
+  const collectorTarget = {};
+  for (const [id, c] of Object.entries(cuentas)) if (c.destinoInteresId) collectorTarget[id] = c.destinoInteresId;
+  for (let d = 0; d < days; d++) {
+    const interestToday = {};
+    for (const [id, c] of Object.entries(cuentas)) interestToday[id] = state[id] * (c.tasaAnual / 365);
+    // ojo: usamos la tasa/saldo original de la cuenta para c1/c2 (no componen su propio saldo, fluye fuera)
+    for (const id of collectorIds) {
+      const target = collectorTarget[id];
+      state[target] += interestToday[id];
+    }
+    for (const [id, c] of Object.entries(cuentas)) {
+      if (!c.destinoInteresId) state[id] += interestToday[id]; // la colectora compone
+    }
+  }
+  return state;
+}
+
+function rendimientoBalanceHoy(cuenta) {
+  if (cuenta.tipo === 'grupo_colector') {
+    return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + c.saldo, 0);
+  }
+  return cuenta.saldo;
+}
+
+function rendimientoProjectTotal(cuenta, days) {
+  if (cuenta.tipo === 'grupo_colector') {
+    const final = klarProjectBalances(cuenta.cuentas, days);
+    return Object.values(final).reduce((s, v) => s + v, 0);
+  }
+  if (cuenta.tipo === 'escalonado_predictivo') {
+    // Proyección conservadora: solo mientras el saldo no rebase el tope de nivel 1.
+    const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
+    const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
+    let saldo = cuenta.saldo;
+    for (let d = 0; d < days; d++) {
+      if (saldo >= tope) return { saldo, capped: true };
+      saldo += saldo * (tasa1 / 365);
+    }
+    return { saldo, capped: false };
+  }
+  // simple y declining_vinculado: interés compuesto diario a tasa fija
+  let saldo = cuenta.saldo;
+  for (let d = 0; d < days; d++) saldo += saldo * (cuenta.tasaAnual / 365);
+  return saldo;
+}
+
+/* ============================ APP STATE ================================ */
+let state = { rendimientos: {}, deudas: {}, movimientos: {}, snapshots: {} };
+let currentTab = 'rendimientos';
+let appInitialized = false;
+
+function initApp() {
+  if (appInitialized) return;
+  appInitialized = true;
+
+  db.ref('patrimonio/rendimientos').on('value', (snap) => { state.rendimientos = snap.val() || {}; render(); });
+  db.ref('patrimonio/deudas').on('value', (snap) => { state.deudas = snap.val() || {}; render(); });
+  db.ref('patrimonio/movimientos').limitToLast(50).on('value', (snap) => { state.movimientos = snap.val() || {}; render(); });
+  db.ref('patrimonio/snapshots').limitToLast(60).on('value', (snap) => { state.snapshots = snap.val() || {}; render(); });
+
+  document.querySelectorAll('.tab').forEach(tabEl => {
+    tabEl.addEventListener('click', () => {
+      currentTab = tabEl.dataset.tab;
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tabEl));
+      ['rendimientos', 'deudas', 'historial'].forEach(name => {
+        document.getElementById('tab-' + name).classList.toggle('hidden', name !== currentTab);
+      });
+    });
+  });
+
+  document.getElementById('add-rendimiento-btn').addEventListener('click', () => openRendimientoForm());
+  document.getElementById('add-deuda-btn').addEventListener('click', () => openDeudaForm());
+  document.getElementById('seed-btn').addEventListener('click', seedInitialData);
+}
+
+/* ============================ MOVEMENT LOG ============================= */
+function logMovimiento({ tipo, refId, nombre, campo, valorAnterior, valorNuevo, nota }) {
+  return db.ref('patrimonio/movimientos').push({
+    ts: Date.now(), fecha: todayISO(), tipo, refId, nombre: nombre || '', campo, valorAnterior: valorAnterior ?? null,
+    valorNuevo: valorNuevo ?? null, nota: nota || ''
+  });
+}
+
+function recordSnapshot(totalRendimientos, totalDeudas) {
+  const today = todayISO();
+  const existing = Object.entries(state.snapshots || {}).find(([, s]) => s.fecha === today);
+  // Si ya hay un snapshot de hoy con los mismos totales, no reescribas: evita un loop
+  // infinito (este write dispara el listener 'value' de snapshots, que vuelve a llamar render()).
+  if (existing && Math.abs(existing[1].totalRendimientos - totalRendimientos) < 0.005 && Math.abs(existing[1].totalDeudas - totalDeudas) < 0.005) {
+    return;
+  }
+  const payload = { fecha: today, totalRendimientos, totalDeudas, patrimonioNeto: totalRendimientos - totalDeudas, ts: Date.now() };
+  if (existing) db.ref('patrimonio/snapshots/' + existing[0]).update(payload);
+  else db.ref('patrimonio/snapshots').push(payload);
+}
+
+/* ============================== RENDER ================================= */
+function render() {
+  renderZoneA();
+  renderRendimientos();
+  renderDeudas();
+  renderHistorial();
+  renderChart();
+  const empty = Object.keys(state.rendimientos).length === 0 && Object.keys(state.deudas).length === 0;
+  document.getElementById('seed-banner').classList.toggle('hidden', !empty);
+}
+
+function renderZoneA() {
+  const totalRendimientos = Object.values(state.rendimientos).reduce((s, c) => s + rendimientoBalanceHoy(c), 0);
+  const deudasArr = Object.values(state.deudas);
+  const totalDeudasConocidas = deudasArr.filter(d => !d.montoPendiente).reduce((s, d) => s + (d.montoTotal || 0), 0);
+  const pendientes = deudasArr.filter(d => d.montoPendiente).map(d => d.institucion);
+
+  document.getElementById('total-rendimientos').textContent = fmtMoney(totalRendimientos);
+  document.getElementById('total-deudas').textContent = fmtMoney(totalDeudasConocidas);
+  document.getElementById('patrimonio-neto').textContent = fmtMoney(totalRendimientos - totalDeudasConocidas);
+  document.getElementById('pending-note').textContent = pendientes.length
+    ? `No incluye deuda(s) con monto pendiente de confirmar: ${pendientes.join(', ')}.`
+    : '';
+
+  const snaps = Object.values(state.snapshots || {}).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  const trendPill = document.getElementById('trend-pill');
+  if (snaps.length >= 2) {
+    const diff = snaps[snaps.length - 1].patrimonioNeto - snaps[snaps.length - 2].patrimonioNeto;
+    trendPill.textContent = (diff >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(diff));
+    trendPill.className = 'pill ' + (diff >= 0 ? 'green' : 'red');
+  } else {
+    trendPill.textContent = 'sin histórico';
+    trendPill.className = 'pill';
+  }
+
+  recordSnapshot(totalRendimientos, totalDeudasConocidas);
+}
+
+function accountTypeLabel(tipo) {
+  return { simple: 'Tasa simple', escalonado_predictivo: 'Escalonado + alerta', declining_vinculado: 'Vinculada a deuda', grupo_colector: 'Grupo colector' }[tipo] || tipo;
+}
+
+function renderRendimientos() {
+  const list = document.getElementById('rendimientos-list');
+  const entries = Object.entries(state.rendimientos);
+  list.innerHTML = '';
+  if (!entries.length) { list.innerHTML = '<div class="empty-state">Sin cuentas registradas</div>'; return; }
+
+  for (const [id, cuenta] of entries) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const balance = rendimientoBalanceHoy(cuenta);
+    const proj30 = rendimientoProjectTotal(cuenta, 30);
+    const proj90 = rendimientoProjectTotal(cuenta, 90);
+    const proj365 = rendimientoProjectTotal(cuenta, 365);
+    const p30 = typeof proj30 === 'object' ? proj30.saldo : proj30;
+    const p90 = typeof proj90 === 'object' ? proj90.saldo : proj90;
+    const p365 = typeof proj365 === 'object' ? proj365.saldo : proj365;
+
+    let extraHtml = '';
+
+    if (cuenta.tipo === 'escalonado_predictivo') {
+      const proj = revolutProjection(cuenta);
+      const tasa2 = cuenta.tasas?.[1];
+      let projHtml = '';
+      if (proj.estado === 'proyectado') {
+        const dias = daysBetween(todayISO(), proj.fechaAlerta);
+        projHtml = `<div class="link-badge">📈 Llega a ${fmtMoney(proj.tope)} el <b>${fmtDate(proj.fechaProyectada)}</b> (${proj.diasRestantes} días) · alerta el ${fmtDate(proj.fechaAlerta)}${dias >= 0 ? ` (en ${dias} días)` : ' (¡ya pasó!)'} · promedio ${fmtMoney(proj.avgDaily)}/día</div>`;
+      } else if (proj.estado === 'en_tope') {
+        projHtml = `<div class="link-badge">⚠️ Saldo ya alcanzó el tope de nivel 1 (${fmtMoney(proj.tope)}). Tasa del excedente: ${tasa2?.pendiente ? 'pendiente de confirmar' : (tasa2?.tasaAnual * 100 + '%')}</div>`;
+      } else {
+        projHtml = `<div class="link-badge">Sin suficiente historial de interés diario para proyectar. Registra pagos de interés.</div>`;
+      }
+      extraHtml += projHtml;
+      if (tasa2?.pendiente) extraHtml += `<div class="pill gold" style="margin-top:6px;">Tasa nivel 2: pendiente de confirmar</div>`;
+      extraHtml += `<div class="btn-row" style="margin-top:8px;"><button class="btn sm" data-action="log-interest" data-id="${id}">Registrar interés del día</button></div>`;
+    }
+
+    if (cuenta.tipo === 'declining_vinculado' && cuenta.deudaVinculadaId) {
+      const deuda = state.deudas[cuenta.deudaVinculadaId];
+      extraHtml += `<div class="link-badge">🔗 Vinculada a la deuda ${deuda ? deuda.institucion : cuenta.deudaVinculadaId}: al registrar su pago mensual, se resta automáticamente de esta cuenta.</div>`;
+    }
+
+    if (cuenta.tipo === 'grupo_colector') {
+      const subs = Object.entries(cuenta.cuentas || {});
+      const collectorEntry = subs.find(([, c]) => !c.destinoInteresId);
+      const feeders = subs.filter(([, c]) => c.destinoInteresId);
+      extraHtml += `<div class="flow-diagram">`;
+      feeders.forEach(([sid, s]) => {
+        extraHtml += `<span class="flow-node">${s.nombre} (${(s.tasaAnual * 100).toFixed(0)}%)</span><span class="flow-arrow">→</span>`;
+      });
+      if (collectorEntry) extraHtml += `<span class="flow-node" style="border-color:var(--gold);">${collectorEntry[1].nombre} (${(collectorEntry[1].tasaAnual * 100).toFixed(0)}%) 🏦 colectora</span>`;
+      extraHtml += `</div>`;
+      extraHtml += '<table style="margin-top:8px;"><thead><tr><th>Subcuenta</th><th>Saldo</th><th>Tasa</th></tr></thead><tbody>' +
+        subs.map(([sid, s]) => `<tr><td>${s.nombre}</td><td>${fmtMoney(s.saldo)}</td><td>${(s.tasaAnual * 100).toFixed(1)}%</td></tr>`).join('') +
+        '</tbody></table>';
+    }
+
+    card.innerHTML = `
+      <div class="row">
+        <div>
+          <h3>${cuenta.nombre}</h3>
+          <span class="pill blue">${accountTypeLabel(cuenta.tipo)}</span>
+        </div>
+        <div style="text-align:right;">
+          <div class="amount sm green">${fmtMoney(balance)}</div>
+        </div>
+      </div>
+      ${extraHtml}
+      <div class="divider"></div>
+      <div class="row" style="font-size:12px;color:var(--muted);">
+        <span>30 días: ${fmtMoney(p30)}</span>
+        <span>90 días: ${fmtMoney(p90)}</span>
+        <span>365 días: ${fmtMoney(p365)}</span>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn sm" data-action="edit-rendimiento" data-id="${id}">Actualizar saldo</button>
+        <button class="btn sm danger" data-action="delete-rendimiento" data-id="${id}">Eliminar</button>
+      </div>
+    `;
+    list.appendChild(card);
+  }
+
+  list.querySelectorAll('[data-action="edit-rendimiento"]').forEach(b => b.addEventListener('click', () => openRendimientoForm(b.dataset.id)));
+  list.querySelectorAll('[data-action="delete-rendimiento"]').forEach(b => b.addEventListener('click', () => deleteRendimiento(b.dataset.id)));
+  list.querySelectorAll('[data-action="log-interest"]').forEach(b => b.addEventListener('click', () => openInterestLogForm(b.dataset.id)));
+}
+
+function renderDeudas() {
+  const list = document.getElementById('deudas-list');
+  const entries = Object.entries(state.deudas);
+  list.innerHTML = '';
+  if (!entries.length) { list.innerHTML = '<div class="empty-state">Sin deudas registradas</div>'; return; }
+
+  let sumaPagos = 0, algunoSinPago = false;
+
+  for (const [id, deuda] of entries) {
+    if (deuda.pagoMensualPendiente || deuda.pagoMensual == null) algunoSinPago = true;
+    else sumaPagos += deuda.pagoMensual;
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    let linkHtml = '';
+    if (deuda.cuentaRendimientoVinculadaId) {
+      const cuenta = state.rendimientos[deuda.cuentaRendimientoVinculadaId];
+      linkHtml = `<div class="link-badge">🔗 Pago mensual sale de la cuenta de rendimiento ${cuenta ? cuenta.nombre : deuda.cuentaRendimientoVinculadaId}</div>`;
+    }
+    card.innerHTML = `
+      <div class="row">
+        <div>
+          <h3>${deuda.institucion}</h3>
+          ${deuda.diaNotificacion ? `<span class="pill">🔔 día ${deuda.diaNotificacion}</span>` : `<span class="pill">sin alerta</span>`}
+        </div>
+        <div style="text-align:right;">
+          <div class="amount sm red">${deuda.montoPendiente ? 'Pendiente' : fmtMoney(deuda.montoTotal)}</div>
+        </div>
+      </div>
+      <div class="row" style="font-size:12px;color:var(--muted);margin-top:6px;">
+        <span>Pago mensual: ${deuda.pagoMensualPendiente || deuda.pagoMensual == null ? 'no definido' : fmtMoney(deuda.pagoMensual)}</span>
+        ${deuda.diaCorte ? `<span>Corte: día ${deuda.diaCorte}</span>` : ''}
+        ${deuda.diaVencimiento ? `<span>Vence: día ${deuda.diaVencimiento}</span>` : ''}
+      </div>
+      ${deuda.notas ? `<p class="muted" style="font-size:12px;margin-top:6px;">${deuda.notas}</p>` : ''}
+      ${linkHtml}
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn sm" data-action="edit-deuda" data-id="${id}">Editar</button>
+        ${!deuda.montoPendiente ? `<button class="btn sm" data-action="pay-deuda" data-id="${id}">Registrar pago</button>` : ''}
+        <button class="btn sm danger" data-action="delete-deuda" data-id="${id}">Eliminar</button>
+      </div>
+    `;
+    list.appendChild(card);
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'card';
+  summary.innerHTML = `<div class="row"><span class="muted" style="font-size:12px;">Suma de pagos mensuales conocidos</span><b>${fmtMoney(sumaPagos)}</b></div>${algunoSinPago ? '<p class="muted" style="font-size:11px;margin-top:4px;">Excluye deudas sin pago mensual definido.</p>' : ''}`;
+  list.appendChild(summary);
+
+  list.querySelectorAll('[data-action="edit-deuda"]').forEach(b => b.addEventListener('click', () => openDeudaForm(b.dataset.id)));
+  list.querySelectorAll('[data-action="delete-deuda"]').forEach(b => b.addEventListener('click', () => deleteDeuda(b.dataset.id)));
+  list.querySelectorAll('[data-action="pay-deuda"]').forEach(b => b.addEventListener('click', () => registrarPagoDeuda(b.dataset.id)));
+}
+
+function renderHistorial() {
+  const body = document.getElementById('historial-body');
+  const empty = document.getElementById('historial-empty');
+  const entries = Object.entries(state.movimientos).sort((a, b) => b[1].ts - a[1].ts);
+  body.innerHTML = '';
+  empty.classList.toggle('hidden', entries.length > 0);
+  for (const [id, m] of entries) {
+    const tr = document.createElement('tr');
+    const cambio = (m.valorAnterior != null && m.valorNuevo != null) ? `${fmtMoney(m.valorAnterior)} → ${fmtMoney(m.valorNuevo)}` : (m.nota || '');
+    tr.innerHTML = `<td>${fmtDate(m.fecha)}</td><td>${m.nombre || m.campo || ''}</td><td>${cambio}</td><td><button class="btn sm danger" data-id="${id}">✕</button></td>`;
+    body.appendChild(tr);
+  }
+  body.querySelectorAll('button[data-id]').forEach(b => b.addEventListener('click', () => {
+    if (confirm('¿Eliminar este movimiento del historial?')) db.ref('patrimonio/movimientos/' + b.dataset.id).remove();
+  }));
+}
+
+function renderChart() {
+  const canvas = document.getElementById('chart-canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.clientWidth || 320;
+  const cssHeight = 140;
+  canvas.width = cssWidth * dpr; canvas.height = cssHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const points = Object.values(state.snapshots || {}).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  if (points.length < 2) {
+    ctx.fillStyle = '#8FA0C2'; ctx.font = '12px sans-serif';
+    ctx.fillText('Necesitas al menos 2 registros para graficar', 8, cssHeight / 2);
+    return;
+  }
+  const values = points.map(p => p.patrimonioNeto);
+  const min = Math.min(...values), max = Math.max(...values);
+  const pad = 10;
+  const xStep = (cssWidth - pad * 2) / (points.length - 1);
+  const yFor = (v) => {
+    if (max === min) return cssHeight / 2;
+    return cssHeight - pad - ((v - min) / (max - min)) * (cssHeight - pad * 2);
+  };
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = pad + i * xStep, y = yFor(p.patrimonioNeto);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#3DDC97'; ctx.lineWidth = 2; ctx.stroke();
+}
+
+/* ========================= CRUD: RENDIMIENTOS =========================== */
+function openRendimientoForm(id) {
+  const isEdit = !!id;
+  const cuenta = isEdit ? state.rendimientos[id] : null;
+  const tipo = cuenta?.tipo || 'simple';
+
+  const modal = renderModal(isEdit ? `Actualizar ${cuenta.nombre}` : 'Nueva cuenta de rendimiento', `
+    ${!isEdit ? `
+    <div class="field"><label>Nombre</label><input id="f-nombre" value="${cuenta?.nombre || ''}" /></div>
+    <div class="field"><label>Tipo</label>
+      <select id="f-tipo">
+        <option value="simple">Simple (tasa fija)</option>
+        <option value="escalonado_predictivo">Escalonado con alerta predictiva</option>
+        <option value="declining_vinculado">Vinculada a una deuda</option>
+        <option value="grupo_colector">Grupo con cuenta colectora (Klar)</option>
+      </select>
+    </div>` : `<input type="hidden" id="f-tipo" value="${tipo}" /><input type="hidden" id="f-nombre" value="${cuenta.nombre}" />`}
+    <div id="f-dynamic"></div>
+    <div class="btn-row" style="margin-top:12px;">
+      <button class="btn primary block" id="f-save">Guardar</button>
+    </div>
+  `);
+
+  function renderDynamicFields(t) {
+    const dyn = modal.querySelector('#f-dynamic');
+    if (t === 'grupo_colector') {
+      const c = cuenta?.cuentas || { c1: { nombre: '', saldo: 0, tasaAnual: 0, destinoInteresId: 'c3' }, c2: { nombre: '', saldo: 0, tasaAnual: 0, destinoInteresId: 'c3' }, c3: { nombre: '', saldo: 0, tasaAnual: 0 } };
+      dyn.innerHTML = ['c1', 'c2', 'c3'].map(k => `
+        <div class="field"><label>${k === 'c3' ? 'Cuenta colectora — nombre' : 'Subcuenta ' + k + ' — nombre'}</label><input id="f-${k}-nombre" value="${c[k]?.nombre || ''}" /></div>
+        <div class="field"><label>Saldo</label><input id="f-${k}-saldo" type="number" step="0.01" value="${c[k]?.saldo ?? ''}" /></div>
+        <div class="field"><label>Tasa anual (%)</label><input id="f-${k}-tasa" type="number" step="0.01" value="${c[k] ? (c[k].tasaAnual * 100) : ''}" /></div>
+      `).join('<div class="divider"></div>');
+    } else if (t === 'escalonado_predictivo') {
+      const t1 = cuenta?.tasas?.[0], t2 = cuenta?.tasas?.[1];
+      dyn.innerHTML = `
+        <div class="field"><label>Saldo actual</label><input id="f-saldo" type="number" step="0.01" value="${cuenta?.saldo ?? ''}" /></div>
+        <div class="field"><label>Tope nivel 1</label><input id="f-tope" type="number" step="0.01" value="${t1?.hasta ?? 25000}" /></div>
+        <div class="field"><label>Tasa nivel 1 (%)</label><input id="f-tasa1" type="number" step="0.01" value="${t1 ? t1.tasaAnual * 100 : 15}" /></div>
+        <div class="field"><label>Tasa nivel 2 (%) — deja vacío si es desconocida</label><input id="f-tasa2" type="number" step="0.01" value="${t2 && !t2.pendiente ? t2.tasaAnual * 100 : ''}" /></div>
+      `;
+    } else if (t === 'declining_vinculado') {
+      const deudaOptions = Object.entries(state.deudas).map(([id2, d]) => `<option value="${id2}" ${cuenta?.deudaVinculadaId === id2 ? 'selected' : ''}>${d.institucion}</option>`).join('');
+      dyn.innerHTML = `
+        <div class="field"><label>Saldo actual</label><input id="f-saldo" type="number" step="0.01" value="${cuenta?.saldo ?? ''}" /></div>
+        <div class="field"><label>Tasa anual (%)</label><input id="f-tasa" type="number" step="0.01" value="${cuenta ? cuenta.tasaAnual * 100 : ''}" /></div>
+        <div class="field"><label>Deuda vinculada</label><select id="f-deuda-link"><option value="">— ninguna —</option>${deudaOptions}</select></div>
+        <div class="field"><label>Día de ciclo (informativo)</label><input id="f-ciclo" type="number" min="1" max="31" value="${cuenta?.cicloDia ?? ''}" /></div>
+      `;
+    } else {
+      dyn.innerHTML = `
+        <div class="field"><label>Saldo actual</label><input id="f-saldo" type="number" step="0.01" value="${cuenta?.saldo ?? ''}" /></div>
+        <div class="field"><label>Tasa anual (%)</label><input id="f-tasa" type="number" step="0.01" value="${cuenta ? cuenta.tasaAnual * 100 : ''}" /></div>
+      `;
+    }
+  }
+  renderDynamicFields(tipo);
+  if (!isEdit) modal.querySelector('#f-tipo').addEventListener('change', (e) => renderDynamicFields(e.target.value));
+
+  modal.querySelector('#f-save').addEventListener('click', () => {
+    const t = modal.querySelector('#f-tipo').value;
+    const nombre = modal.querySelector('#f-nombre').value.trim() || (isEdit ? cuenta.nombre : t);
+    let payload = { tipo: t, nombre, actualizadoEn: Date.now() };
+
+    if (t === 'grupo_colector') {
+      const cuentas = {};
+      ['c1', 'c2', 'c3'].forEach(k => {
+        cuentas[k] = {
+          nombre: modal.querySelector(`#f-${k}-nombre`).value.trim(),
+          saldo: parseFloat(modal.querySelector(`#f-${k}-saldo`).value) || 0,
+          tasaAnual: (parseFloat(modal.querySelector(`#f-${k}-tasa`).value) || 0) / 100,
+        };
+      });
+      cuentas.c1.destinoInteresId = 'c3';
+      cuentas.c2.destinoInteresId = 'c3';
+      payload.cuentas = cuentas;
+    } else if (t === 'escalonado_predictivo') {
+      const saldo = parseFloat(modal.querySelector('#f-saldo').value) || 0;
+      const tope = parseFloat(modal.querySelector('#f-tope').value) || 25000;
+      const tasa1 = (parseFloat(modal.querySelector('#f-tasa1').value) || 0) / 100;
+      const tasa2raw = modal.querySelector('#f-tasa2').value;
+      payload.saldo = saldo;
+      payload.tasas = [{ hasta: tope, tasaAnual: tasa1 }, tasa2raw === '' ? { desde: tope, tasaAnual: null, pendiente: true } : { desde: tope, tasaAnual: parseFloat(tasa2raw) / 100, pendiente: false }];
+      payload.historialInteres = cuenta?.historialInteres || {};
+    } else if (t === 'declining_vinculado') {
+      payload.saldo = parseFloat(modal.querySelector('#f-saldo').value) || 0;
+      payload.tasaAnual = (parseFloat(modal.querySelector('#f-tasa').value) || 0) / 100;
+      const link = modal.querySelector('#f-deuda-link').value;
+      if (link) payload.deudaVinculadaId = link;
+      const ciclo = modal.querySelector('#f-ciclo').value;
+      if (ciclo) payload.cicloDia = parseInt(ciclo, 10);
+    } else {
+      payload.saldo = parseFloat(modal.querySelector('#f-saldo').value) || 0;
+      payload.tasaAnual = (parseFloat(modal.querySelector('#f-tasa').value) || 0) / 100;
+    }
+
+    const targetId = id || uid();
+    const prevBalance = cuenta ? rendimientoBalanceHoy(cuenta) : null;
+    db.ref('patrimonio/rendimientos/' + targetId).update(payload).then(() => {
+      const newBalance = rendimientoBalanceHoy(payload);
+      logMovimiento({ tipo: 'rendimiento', refId: targetId, nombre: payload.nombre, campo: 'saldo', valorAnterior: prevBalance, valorNuevo: newBalance });
+      toast('Cuenta guardada');
+      closeModal();
+    });
+  });
+}
+
+function deleteRendimiento(id) {
+  const cuenta = state.rendimientos[id];
+  if (!confirm(`¿Eliminar la cuenta ${cuenta.nombre}? Esto no se puede deshacer.`)) return;
+  db.ref('patrimonio/rendimientos/' + id).remove().then(() => {
+    logMovimiento({ tipo: 'rendimiento', refId: id, nombre: cuenta.nombre, nota: 'Cuenta eliminada' });
+    toast('Cuenta eliminada');
+  });
+}
+
+function openInterestLogForm(id) {
+  const cuenta = state.rendimientos[id];
+  const modal = renderModal(`Registrar interés — ${cuenta.nombre}`, `
+    <div class="field"><label>Fecha</label><input id="f-fecha" type="date" value="${todayISO()}" /></div>
+    <div class="field"><label>Monto del interés (MXN)</label><input id="f-monto" type="number" step="0.01" placeholder="9.72" /></div>
+    <div class="field"><label>Sumar al saldo también</label>
+      <select id="f-sumar"><option value="si">Sí, sumarlo al saldo actual</option><option value="no">No, solo registrar el dato</option></select>
+    </div>
+    <button class="btn primary block" id="f-save">Guardar</button>
+  `);
+  modal.querySelector('#f-save').addEventListener('click', () => {
+    const fecha = modal.querySelector('#f-fecha').value;
+    const monto = parseFloat(modal.querySelector('#f-monto').value);
+    const sumar = modal.querySelector('#f-sumar').value === 'si';
+    if (!fecha || Number.isNaN(monto)) { toast('Completa fecha y monto'); return; }
+    const updates = {};
+    updates[`patrimonio/rendimientos/${id}/historialInteres/${uid()}`] = { fecha, monto };
+    if (sumar) updates[`patrimonio/rendimientos/${id}/saldo`] = (cuenta.saldo || 0) + monto;
+    db.ref().update(updates).then(() => {
+      logMovimiento({ tipo: 'rendimiento', refId: id, nombre: cuenta.nombre, nota: `Interés registrado: ${fmtMoney(monto)} (${fecha})` });
+      toast('Interés registrado');
+      closeModal();
+    });
+  });
+}
+
+/* ============================ CRUD: DEUDAS =============================== */
+function openDeudaForm(id) {
+  const isEdit = !!id;
+  const deuda = isEdit ? state.deudas[id] : null;
+  const rendimientoOptions = Object.entries(state.rendimientos).map(([rid, r]) => `<option value="${rid}" ${deuda?.cuentaRendimientoVinculadaId === rid ? 'selected' : ''}>${r.nombre}</option>`).join('');
+
+  const modal = renderModal(isEdit ? `Editar ${deuda.institucion}` : 'Nueva deuda', `
+    <div class="field"><label>Institución</label><input id="f-institucion" value="${deuda?.institucion || ''}" /></div>
+    <div class="field"><label>Monto total</label><input id="f-monto" type="number" step="0.01" value="${deuda && !deuda.montoPendiente ? deuda.montoTotal : ''}" placeholder="Déjalo vacío si es pendiente de confirmar" /></div>
+    <div class="field"><label>Pago mensual</label><input id="f-pago" type="number" step="0.01" value="${deuda && !deuda.pagoMensualPendiente && deuda.pagoMensual != null ? deuda.pagoMensual : ''}" placeholder="Déjalo vacío si no está definido" /></div>
+    <div class="field"><label>Día de corte (opcional)</label><input id="f-corte" type="number" min="1" max="31" value="${deuda?.diaCorte ?? ''}" /></div>
+    <div class="field"><label>Día de vencimiento (opcional)</label><input id="f-venc" type="number" min="1" max="31" value="${deuda?.diaVencimiento ?? ''}" /></div>
+    <div class="field"><label>Día de notificación por correo (opcional)</label><input id="f-notif" type="number" min="1" max="31" value="${deuda?.diaNotificacion ?? ''}" /></div>
+    <div class="field"><label>Cuenta de rendimiento vinculada (opcional)</label><select id="f-link"><option value="">— ninguna —</option>${rendimientoOptions}</select></div>
+    <div class="field"><label>Notas</label><textarea id="f-notas" rows="2">${deuda?.notas || ''}</textarea></div>
+    <button class="btn primary block" id="f-save">Guardar</button>
+  `);
+
+  modal.querySelector('#f-save').addEventListener('click', () => {
+    const institucion = modal.querySelector('#f-institucion').value.trim();
+    if (!institucion) { toast('Falta el nombre de la institución'); return; }
+    const montoRaw = modal.querySelector('#f-monto').value;
+    const pagoRaw = modal.querySelector('#f-pago').value;
+    const payload = {
+      institucion,
+      montoTotal: montoRaw === '' ? null : parseFloat(montoRaw),
+      montoPendiente: montoRaw === '',
+      pagoMensual: pagoRaw === '' ? null : parseFloat(pagoRaw),
+      pagoMensualPendiente: pagoRaw === '',
+      diaCorte: modal.querySelector('#f-corte').value ? parseInt(modal.querySelector('#f-corte').value, 10) : null,
+      diaVencimiento: modal.querySelector('#f-venc').value ? parseInt(modal.querySelector('#f-venc').value, 10) : null,
+      diaNotificacion: modal.querySelector('#f-notif').value ? parseInt(modal.querySelector('#f-notif').value, 10) : null,
+      cuentaRendimientoVinculadaId: modal.querySelector('#f-link').value || null,
+      notas: modal.querySelector('#f-notas').value.trim(),
+    };
+    const targetId = id || uid();
+    db.ref('patrimonio/deudas/' + targetId).update(payload).then(() => {
+      logMovimiento({ tipo: 'deuda', refId: targetId, nombre: institucion, campo: 'monto', valorAnterior: deuda?.montoTotal ?? null, valorNuevo: payload.montoTotal });
+      toast('Deuda guardada');
+      closeModal();
+    });
+  });
+}
+
+function deleteDeuda(id) {
+  const deuda = state.deudas[id];
+  if (!confirm(`¿Eliminar la deuda ${deuda.institucion}?`)) return;
+  db.ref('patrimonio/deudas/' + id).remove().then(() => {
+    logMovimiento({ tipo: 'deuda', refId: id, nombre: deuda.institucion, nota: 'Deuda eliminada' });
+    toast('Deuda eliminada');
+  });
+}
+
+function registrarPagoDeuda(id) {
+  const deuda = state.deudas[id];
+  const sugerido = !deuda.pagoMensualPendiente && deuda.pagoMensual != null ? deuda.pagoMensual : '';
+  const cuentaLigada = deuda.cuentaRendimientoVinculadaId ? state.rendimientos[deuda.cuentaRendimientoVinculadaId] : null;
+
+  const modal = renderModal(`Registrar pago — ${deuda.institucion}`, `
+    <div class="field"><label>Monto pagado</label><input id="f-monto" type="number" step="0.01" value="${sugerido}" /></div>
+    <div class="field"><label>Reducir el monto total de la deuda por este pago</label>
+      <select id="f-reduce"><option value="si">Sí</option><option value="no">No (solo registrar)</option></select>
+    </div>
+    ${cuentaLigada ? `<div class="link-badge">🔗 Esto restará el mismo monto del saldo de ${cuentaLigada.nombre}, como está configurado.</div>` : ''}
+    <button class="btn primary block" id="f-save" style="margin-top:10px;">Confirmar pago</button>
+  `);
+
+  modal.querySelector('#f-save').addEventListener('click', () => {
+    const monto = parseFloat(modal.querySelector('#f-monto').value);
+    if (Number.isNaN(monto) || monto <= 0) { toast('Ingresa un monto válido'); return; }
+    const reduce = modal.querySelector('#f-reduce').value === 'si';
+    const updates = {};
+    if (reduce && !deuda.montoPendiente) {
+      updates[`patrimonio/deudas/${id}/montoTotal`] = Math.max(0, (deuda.montoTotal || 0) - monto);
+    }
+    if (cuentaLigada) {
+      updates[`patrimonio/rendimientos/${deuda.cuentaRendimientoVinculadaId}/saldo`] = Math.max(0, (cuentaLigada.saldo || 0) - monto);
+    }
+    db.ref().update(updates).then(() => {
+      logMovimiento({ tipo: 'pago_vinculado', refId: id, nombre: deuda.institucion, nota: `Pago registrado: ${fmtMoney(monto)}${cuentaLigada ? ` (restado de ${cuentaLigada.nombre})` : ''}` });
+      toast('Pago registrado');
+      closeModal();
+    });
+  });
+}
+
+/* ============================== MODAL =================================== */
+function renderModal(title, bodyHtml) {
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${title}</h3><button class="close-x" id="modal-close">✕</button></div>
+        ${bodyHtml}
+      </div>
+    </div>
+  `;
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
+  return root;
+}
+function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+/* ============================ SEED INICIAL ================================ */
+function seedInitialData() {
+  if (!confirm('Esto va a escribir los datos iniciales de Revolut, Nu, Klar, Uala y las 7 deudas. ¿Continuar?')) return;
+
+  const today = todayISO();
+  const rendimientos = {
+    revolut: {
+      tipo: 'escalonado_predictivo', nombre: 'Revolut', saldo: 24818.51,
+      tasas: [{ hasta: 25000, tasaAnual: 0.15 }, { desde: 25000, tasaAnual: null, pendiente: true }],
+      capitalizaDiario: true,
+      // Semilla estimada a partir del rango reportado (9.71–9.73 MXN/día); edítalo con tus valores reales.
+      historialInteres: {
+        s1: { fecha: addDays(today, -4), monto: 9.71 }, s2: { fecha: addDays(today, -3), monto: 9.72 },
+        s3: { fecha: addDays(today, -2), monto: 9.73 }, s4: { fecha: addDays(today, -1), monto: 9.72 },
+        s5: { fecha: today, monto: 9.71 },
+      },
+      actualizadoEn: Date.now(),
+    },
+    nu: { tipo: 'declining_vinculado', nombre: 'Nu', saldo: 15918.89, tasaAnual: 0.065, deudaVinculadaId: 'nu_deuda', cicloDia: 5, actualizadoEn: Date.now() },
+    klar: {
+      tipo: 'grupo_colector', nombre: 'Klar',
+      cuentas: {
+        c1: { nombre: 'Klar Cuenta 1', saldo: 40951.71, tasaAnual: 0.13, destinoInteresId: 'c3' },
+        c2: { nombre: 'Klar Cuenta 2', saldo: 25000, tasaAnual: 0.15, destinoInteresId: 'c3' },
+        c3: { nombre: 'Klar Cuenta 3 (colectora)', saldo: 3843.73, tasaAnual: 0.15 },
+      },
+      actualizadoEn: Date.now(),
+    },
+    uala: { tipo: 'simple', nombre: 'Uala', saldo: 30000, tasaAnual: 0.15, actualizadoEn: Date.now() },
+  };
+
+  const deudas = {
+    nu_deuda: { institucion: 'Nu', montoTotal: 16248.14, montoPendiente: false, pagoMensual: 1624.83, pagoMensualPendiente: false, diaNotificacion: 4, cuentaRendimientoVinculadaId: 'nu', notas: '' },
+    mercadopago: { institucion: 'Mercado Pago', montoTotal: 7252.36, montoPendiente: false, pagoMensual: null, pagoMensualPendiente: true, diaCorte: 27, diaVencimiento: 7, diaNotificacion: 4, notas: '' },
+    klar_deuda: { institucion: 'Klar', montoTotal: 10000, montoPendiente: false, pagoMensual: null, pagoMensualPendiente: true, diaNotificacion: null, notas: '' },
+    invex: { institucion: 'INVEX', montoTotal: 11000, montoPendiente: false, pagoMensual: null, pagoMensualPendiente: true, diaNotificacion: 14, notas: '' },
+    uala_deuda: { institucion: 'Uala', montoTotal: 6000, montoPendiente: false, pagoMensual: null, pagoMensualPendiente: true, diaNotificacion: 14, notas: '' },
+    bbva: { institucion: 'BBVA', montoTotal: 4165, montoPendiente: false, pagoMensual: null, pagoMensualPendiente: true, diaNotificacion: 29, notas: '' },
+    claro: { institucion: 'Claro', montoTotal: null, montoPendiente: true, pagoMensual: null, pagoMensualPendiente: true, diaNotificacion: 8, notas: 'Monto y pago mensual pendientes de confirmar' },
+  };
+
+  db.ref('patrimonio').update({ rendimientos, deudas }).then(() => {
+    toast('Datos iniciales cargados');
+  }).catch(err => toast('Error al cargar: ' + err.message));
+}
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
