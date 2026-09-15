@@ -114,6 +114,9 @@ La misma Netlify Function que manda las alertas (corre todos los días a las 6am
 ## Contador de ganancias
 La tarjeta "Ganancia acumulada" arranca en $0 desde que se creó, y sube sola un día a la vez: cada vez que la función hace crecer los saldos, suma ese mismo monto al acumulado. El botón "Reiniciar" en esa tarjeta lo regresa a $0 en cualquier momento — no toca tus saldos ni el crecimiento diario, solo el contador (están desacoplados a propósito: `patrimonio/crecimiento` es la guardia real de "ya crecieron los saldos hoy", `patrimonio/ganancias` es solo el contador visible y reiniciable). "Hoy vas generando" es una estimación en vivo (se recalcula cada vez que abres la app) de lo que se va a acreditar cuando corra la función.
 
+## Rendimiento cuando termines de pagar tu deuda
+Nueva tarjeta en el dashboard (solo aparece si todas tus deudas tienen monto y pago mensual definidos — mientras falte alguno, te dice cuáles). Simula, día a día en el navegador, cómo tus deudas bajan con su pago mensual mientras tus cuentas de rendimiento siguen creciendo, y detiene el retiro mensual hacia la cuenta de Nu en cuanto ESA deuda específica llega a $0. Muestra la fecha estimada en que quedas sin deuda y cuánto tendrías generando ese día (total y por día/mes). Es una proyección con tus tasas y pagos actuales, no una promesa — no considera depósitos, retiros o cambios de tasa futuros.
+
 ## Notificación de tope por cuenta
 En el formulario de cada cuenta de rendimiento (botón "Actualizar saldo") hay una opción para activar "Notificarme cuando esta cuenta llegue a $X", con cuántos días de anticipación avisar (5 por defecto). Aplica a cualquier tipo de cuenta, no solo Revolut (que ya tiene su propia alerta dedicada basada en interés real registrado). La función diaria evalúa la proyección con la tasa nominal de la cuenta y manda el correo el día calculado; si el saldo ya alcanzó el tope, manda un aviso único de "ya llegaste".
 
