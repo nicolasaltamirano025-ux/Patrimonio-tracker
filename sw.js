@@ -1,5 +1,5 @@
 // Bump this on every deploy so clients pick up the new index.html instead of a stale cached copy.
-const CACHE_NAME = 'patrimonio-tracker-v2';
+const CACHE_NAME = 'patrimonio-tracker-v3';
 const CORE_ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon.svg'];
 
 self.addEventListener('install', (event) => {

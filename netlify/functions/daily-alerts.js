@@ -111,40 +111,103 @@ function buildRevolutAlert(proj) {
   return { key: 'revolut_predictivo', subject: 'Patrimonio Tracker — Revolut cerca de su tope', html };
 }
 
-// Misma lógica que totalDailyGain() en index.html — mantenlas iguales si se edita una.
-// El excedente de Revolut sobre su tope no se cuenta mientras su tasa siga pendiente.
-function totalDailyGain(rendimientos) {
-  let total = 0;
-  for (const cuenta of Object.values(rendimientos || {})) {
-    if (cuenta.tipo === 'grupo_colector') {
-      for (const sub of Object.values(cuenta.cuentas || {})) {
-        total += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
-      }
-    } else if (cuenta.tipo === 'escalonado_predictivo') {
-      const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
-      const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
-      total += Math.min(cuenta.saldo || 0, tope) * (tasa1 / 365);
-    } else {
-      total += (cuenta.saldo || 0) * ((cuenta.tasaAnual || 0) / 365);
-    }
-  }
-  return total;
+function buildTopeAlert(cuenta, id, proj) {
+  const html = `
+    <h2>${cuenta.nombre} está por llegar a tu tope</h2>
+    <p>Fecha proyectada de llegar a ${fmtMoney(proj.monto)}: <b>${proj.fechaProyectada}</b></p>
+  `;
+  return { key: `tope_${id}`, subject: `Patrimonio Tracker — ${cuenta.nombre} cerca de tu tope`, html };
 }
 
-// Acredita al contador de ganancias lo que generaron las cuentas hoy, una sola
-// vez por día (idempotente si la función corre más de una vez el mismo día).
-// El usuario puede reiniciar este contador a $0 desde la app cuando quiera.
-async function accrueDailyGain(db, rendimientos, today) {
-  const ref = db.ref('patrimonio/ganancias');
-  const snap = await ref.once('value');
-  const g = snap.val() || { acumulado: 0, resetTs: Date.now(), historial: {} };
-  if (g.ultimaFechaAcreditada === today) return; // ya se acreditó hoy
-  const gananciaHoy = totalDailyGain(rendimientos);
-  await ref.update({
-    acumulado: (g.acumulado || 0) + gananciaHoy,
-    ultimaFechaAcreditada: today,
-    [`historial/${today}`]: gananciaHoy,
-  });
+function buildTopeReachedAlert(cuenta, id, monto) {
+  const html = `<h2>${cuenta.nombre} ya llegó a ${fmtMoney(monto)}</h2><p>El saldo actual ya alcanzó el tope que configuraste para esta cuenta.</p>`;
+  return { key: `tope_alcanzado_${id}`, subject: `Patrimonio Tracker — ${cuenta.nombre} llegó a su tope`, html };
+}
+
+// Cuánto genera UNA cuenta hoy, con base en su saldo y tasa actuales. Misma
+// lógica que dailyGrowthForAccount() en index.html — mantenlas iguales si se
+// edita una. El excedente de Revolut sobre su tope no cuenta mientras su tasa
+// siga pendiente; Klar cuenta el interés total del grupo (fluya donde fluya).
+function dailyGrowthForAccount(cuenta) {
+  if (cuenta.tipo === 'grupo_colector') {
+    return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + (c.saldo || 0) * ((c.tasaAnual || 0) / 365), 0);
+  }
+  if (cuenta.tipo === 'escalonado_predictivo') {
+    const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
+    const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
+    return Math.min(cuenta.saldo || 0, tope) * (tasa1 / 365);
+  }
+  return (cuenta.saldo || 0) * ((cuenta.tasaAnual || 0) / 365);
+}
+
+function totalDailyGain(rendimientos) {
+  return Object.values(rendimientos || {}).reduce((s, c) => s + dailyGrowthForAccount(c), 0);
+}
+
+function balanceHoy(cuenta) {
+  if (cuenta.tipo === 'grupo_colector') return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + (c.saldo || 0), 0);
+  return cuenta.saldo || 0;
+}
+
+// Hace crecer el saldo REAL de cada cuenta con el interés de hoy (una vez al
+// día). En Klar, el interés de las 3 subcuentas se deposita completo en la
+// cuenta colectora (la que no tiene destinoInteresId) — c1 y c2 mantienen su
+// principal. Devuelve los updates a escribir y las cuentas ya actualizadas
+// (para que las alertas de tope de este mismo día usen el saldo ya crecido).
+function computeDailyGrowth(rendimientos) {
+  const updates = {};
+  const rendimientosActualizados = {};
+  let total = 0;
+  for (const [id, cuenta] of Object.entries(rendimientos || {})) {
+    if (cuenta.tipo === 'grupo_colector') {
+      const cuentas = cuenta.cuentas || {};
+      let interesTotal = 0;
+      for (const sub of Object.values(cuentas)) interesTotal += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
+      const collectorId = Object.entries(cuentas).find(([, s]) => !s.destinoInteresId)?.[0];
+      const nuevasCuentas = { ...cuentas };
+      if (collectorId) {
+        nuevasCuentas[collectorId] = { ...cuentas[collectorId], saldo: (cuentas[collectorId].saldo || 0) + interesTotal };
+        updates[`patrimonio/rendimientos/${id}/cuentas/${collectorId}/saldo`] = nuevasCuentas[collectorId].saldo;
+      }
+      rendimientosActualizados[id] = { ...cuenta, cuentas: nuevasCuentas };
+      total += interesTotal;
+    } else {
+      const interes = dailyGrowthForAccount(cuenta);
+      const nuevoSaldo = (cuenta.saldo || 0) + interes;
+      updates[`patrimonio/rendimientos/${id}/saldo`] = nuevoSaldo;
+      rendimientosActualizados[id] = { ...cuenta, saldo: nuevoSaldo };
+      total += interes;
+    }
+  }
+  return { updates, total, rendimientosActualizados };
+}
+
+// Hace crecer los saldos y acredita el contador de ganancias, una sola vez al
+// día (idempotente si la función corre más de una vez el mismo día). La
+// guardia de "ya se aplicó hoy" vive en patrimonio/crecimiento, NO en
+// patrimonio/ganancias — así, si el usuario reinicia su contador de
+// ganancias a la mitad del día, no se salta el crecimiento de saldos de ese
+// día (son dos cosas independientes: una es tuya para reiniciar, la otra no).
+async function applyDailyGrowthAndGain(db, rendimientos, today) {
+  const crecimientoRef = db.ref('patrimonio/crecimiento');
+  const crecimientoSnap = await crecimientoRef.once('value');
+  const c = crecimientoSnap.val() || {};
+  if (c.ultimaFechaAplicada === today) return rendimientos; // ya se aplicó hoy
+
+  const { updates, total, rendimientosActualizados } = computeDailyGrowth(rendimientos);
+  updates['patrimonio/crecimiento/ultimaFechaAplicada'] = today;
+
+  const gananciasSnap = await db.ref('patrimonio/ganancias').once('value');
+  const g = gananciasSnap.val() || { acumulado: 0, resetTs: Date.now(), historial: {} };
+  updates['patrimonio/ganancias/acumulado'] = (g.acumulado || 0) + total;
+  updates[`patrimonio/ganancias/historial/${today}`] = total;
+  const movKey = db.ref('patrimonio/movimientos').push().key;
+  updates[`patrimonio/movimientos/${movKey}`] = {
+    ts: Date.now(), fecha: today, tipo: 'rendimiento', nombre: 'Crecimiento diario automático',
+    nota: `+${fmtMoney(total)} repartido entre tus cuentas`,
+  };
+  await db.ref().update(updates);
+  return rendimientosActualizados;
 }
 
 export default async () => {
@@ -157,12 +220,12 @@ export default async () => {
     db.ref('patrimonio/rendimientos').once('value'),
     db.ref('patrimonio/deudas').once('value'),
   ]);
-  const rendimientos = rendimientosSnap.val() || {};
   const deudas = deudasSnap.val() || {};
-
-  await accrueDailyGain(db, rendimientos, today);
+  // rendimientos ya crecidos con el interés de hoy (si no se había acreditado hoy todavía)
+  const rendimientos = await applyDailyGrowthAndGain(db, rendimientosSnap.val() || {}, today);
 
   const alerts = [];
+  const topeUpdates = {};
 
   if (dayOfMonth === 7) alerts.push(buildSummaryEmail(rendimientos, deudas));
 
@@ -175,6 +238,27 @@ export default async () => {
     const proj = revolutAlertDate(revolut);
     if (proj && proj.fechaAlerta === today) alerts.push(buildRevolutAlert(proj));
   }
+
+  for (const [id, cuenta] of Object.entries(rendimientos)) {
+    const conf = cuenta.notificarTope;
+    if (!conf || !conf.activo || !conf.monto) continue;
+    const saldoActual = balanceHoy(cuenta);
+    if (saldoActual >= conf.monto) {
+      if (!conf.notificadoLlegada) {
+        alerts.push(buildTopeReachedAlert(cuenta, id, conf.monto));
+        topeUpdates[`patrimonio/rendimientos/${id}/notificarTope/notificadoLlegada`] = true;
+      }
+      continue;
+    }
+    const daily = dailyGrowthForAccount(cuenta);
+    if (!daily || daily <= 0) continue;
+    const diasRestantes = Math.ceil((conf.monto - saldoActual) / daily);
+    const fechaProyectada = addDaysISO(today, diasRestantes);
+    const fechaAlerta = addDaysISO(fechaProyectada, -(conf.diasAviso || 5));
+    if (fechaAlerta === today) alerts.push(buildTopeAlert(cuenta, id, { monto: conf.monto, fechaProyectada }));
+  }
+
+  if (Object.keys(topeUpdates).length) await db.ref().update(topeUpdates);
 
   const logRef = db.ref(`patrimonio/alertsLog/${today}`);
   const logSnap = await logRef.once('value');

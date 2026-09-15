@@ -83,16 +83,18 @@ patrimonio/
       tipo: "simple" | "escalonado_predictivo" | "declining_vinculado" | "grupo_colector"
       nombre, saldo, tasaAnual        # tipo simple / declining_vinculado
       tasas: [{hasta, tasaAnual}, {desde, tasaAnual|null, pendiente}]  # escalonado_predictivo
-      historialInteres: { {id}: {fecha, monto} }                       # escalonado_predictivo
+      historialInteres: { {id}: {fecha, monto} }                       # escalonado_predictivo, solo afina la proyección
       deudaVinculadaId, cicloDia                                       # declining_vinculado
       cuentas: { c1: {...}, c2: {...}, c3: {...} }                     # grupo_colector
+      notificarTope: { activo, monto, diasAviso, notificadoLlegada }   # opcional, cualquier tipo
   deudas/
     {id}/
       institucion, montoTotal, montoPendiente, pagoMensual, pagoMensualPendiente,
       diaCorte, diaVencimiento, diaNotificacion, cuentaRendimientoVinculadaId, notas
   movimientos/       # historial combinado, editable/eliminable
   snapshots/          # {fecha, totalRendimientos, totalDeudas, patrimonioNeto} — uno por día, alimenta la gráfica y la tendencia
-  ganancias/          # { acumulado, resetTs, ultimaFechaAcreditada, historial: {fecha: gananciaDelDia} }
+  ganancias/          # { acumulado, resetTs, historial: {fecha: gananciaDelDia} } — reiniciable por el usuario
+  crecimiento/        # { ultimaFechaAplicada } — guardia interna, evita crecer los saldos dos veces el mismo día
   alertsLog/{fecha}/{clave}: true   # evita reenviar la misma alerta el mismo día
 ```
 
@@ -106,8 +108,14 @@ La app detecta si `patrimonio/` está vacío y muestra un banner **"Cargar datos
 - Total de deudas conocidas (excluye montos "pendiente", los marca explícitamente).
 - Patrimonio neto y su tendencia vs. el snapshot anterior.
 
+## Crecimiento diario automático de saldos
+La misma Netlify Function que manda las alertas (corre todos los días a las 6am CDMX) hace crecer el **saldo real** de cada cuenta con el interés de ese día, calculado con su tasa actual (`dailyGrowthForAccount`) — no necesitas actualizar el saldo a mano para que refleje el rendimiento. En Klar, el interés de las 3 subcuentas se deposita completo en la cuenta colectora (c3); c1 y c2 mantienen su principal, tal cual el flujo real del producto. Para Revolut, solo crece la parte dentro del tope de $25,000 mientras la tasa del excedente siga pendiente de confirmar. "Actualizar saldo" en cada tarjeta sigue existiendo, pero ahora es solo para correcciones manuales (ej. si depositaste o retiraste dinero).
+
 ## Contador de ganancias
-La tarjeta "Ganancia acumulada" arranca en $0 desde que se creó, y sube sola un día a la vez: la misma Netlify Function que manda las alertas (corre todos los días a las 6am CDMX) suma lo que generaron tus cuentas ese día (`totalDailyGain`, con base en saldos y tasas actuales) al acumulado, sin que tengas que abrir la app. El botón "Reiniciar" en esa tarjeta lo regresa a $0 en cualquier momento — no toca tus saldos, solo el contador. "Hoy vas generando" es una estimación en vivo (se recalcula cada vez que abres la app) de lo que se va a acreditar cuando corra la función.
+La tarjeta "Ganancia acumulada" arranca en $0 desde que se creó, y sube sola un día a la vez: cada vez que la función hace crecer los saldos, suma ese mismo monto al acumulado. El botón "Reiniciar" en esa tarjeta lo regresa a $0 en cualquier momento — no toca tus saldos ni el crecimiento diario, solo el contador (están desacoplados a propósito: `patrimonio/crecimiento` es la guardia real de "ya crecieron los saldos hoy", `patrimonio/ganancias` es solo el contador visible y reiniciable). "Hoy vas generando" es una estimación en vivo (se recalcula cada vez que abres la app) de lo que se va a acreditar cuando corra la función.
+
+## Notificación de tope por cuenta
+En el formulario de cada cuenta de rendimiento (botón "Actualizar saldo") hay una opción para activar "Notificarme cuando esta cuenta llegue a $X", con cuántos días de anticipación avisar (5 por defecto). Aplica a cualquier tipo de cuenta, no solo Revolut (que ya tiene su propia alerta dedicada basada en interés real registrado). La función diaria evalúa la proyección con la tasa nominal de la cuenta y manda el correo el día calculado; si el saldo ya alcanzó el tope, manda un aviso único de "ya llegaste".
 
 ## Qué NO hace la app (para no asumir datos)
 - No calcula nada sobre la tasa de excedente de Revolut mientras esté marcada `pendiente` — solo avisa.

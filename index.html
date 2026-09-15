@@ -335,27 +335,45 @@ function klarGroupDailyInterest(cuentas) {
   return out;
 }
 
-// Cuánto generan TODAS las cuentas hoy, con base en sus saldos y tasas actuales.
-// Para Revolut, solo cuenta la parte dentro del tope de nivel 1 (la tasa del
-// excedente sigue pendiente de confirmar, así que ese excedente no se suma).
-// Esta misma función corre en el navegador (index.html) y en la Netlify
-// Function (daily-alerts.js) — mantenlas iguales si la editas.
-function totalDailyGain(rendimientos) {
-  let total = 0;
-  for (const cuenta of Object.values(rendimientos || {})) {
-    if (cuenta.tipo === 'grupo_colector') {
-      for (const sub of Object.values(cuenta.cuentas || {})) {
-        total += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
-      }
-    } else if (cuenta.tipo === 'escalonado_predictivo') {
-      const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
-      const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
-      total += Math.min(cuenta.saldo || 0, tope) * (tasa1 / 365);
-    } else {
-      total += (cuenta.saldo || 0) * ((cuenta.tasaAnual || 0) / 365);
-    }
+// Cuánto genera UNA cuenta hoy, con base en su saldo y tasa actuales. Para
+// Revolut, solo cuenta la parte dentro del tope de nivel 1 (la tasa del
+// excedente sigue pendiente de confirmar). Para Klar, es el interés total del
+// grupo (independiente de que fluya internamente a la cuenta colectora).
+// Esta misma lógica vive también en netlify/functions/daily-alerts.js —
+// mantenlas iguales si editas una.
+function dailyGrowthForAccount(cuenta) {
+  if (cuenta.tipo === 'grupo_colector') {
+    return Object.values(klarGroupDailyInterest(cuenta.cuentas || {})).reduce((s, v) => s + v, 0);
   }
-  return total;
+  if (cuenta.tipo === 'escalonado_predictivo') {
+    // Solo crece la parte dentro del tope de nivel 1, incluso si el saldo ya lo
+    // rebasó: la tasa del excedente sigue pendiente de confirmar (no se asume).
+    const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
+    const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
+    return Math.min(cuenta.saldo || 0, tope) * (tasa1 / 365);
+  }
+  return dailyInterestSimple(cuenta.saldo || 0, cuenta.tasaAnual || 0);
+}
+
+function totalDailyGain(rendimientos) {
+  return Object.values(rendimientos || {}).reduce((s, c) => s + dailyGrowthForAccount(c), 0);
+}
+
+// Proyección genérica de "notificarme cuando esta cuenta llegue a $X", disponible
+// para cualquier tipo de cuenta (no solo Revolut). Usa la tasa nominal, ya que a
+// diferencia de Revolut no hay un historial de interés real registrado para promediar.
+function genericTopeProjection(cuenta) {
+  const conf = cuenta.notificarTope;
+  if (!conf || !conf.activo || !conf.monto) return null;
+  const saldoActual = rendimientoBalanceHoy(cuenta);
+  if (saldoActual >= conf.monto) return { estado: 'alcanzado', monto: conf.monto };
+  const daily = dailyGrowthForAccount(cuenta);
+  if (!daily || daily <= 0) return { estado: 'sin_crecimiento', monto: conf.monto };
+  const diasAviso = conf.diasAviso || 5;
+  const diasRestantes = Math.ceil((conf.monto - saldoActual) / daily);
+  const fechaProyectada = addDays(todayISO(), diasRestantes);
+  const fechaAlerta = addDays(fechaProyectada, -diasAviso);
+  return { estado: 'proyectado', monto: conf.monto, diasRestantes, fechaProyectada, fechaAlerta, diasAviso };
 }
 
 // Simula N días del grupo Klar: c1 y c2 generan interés que se deposita en
@@ -472,8 +490,10 @@ function recordSnapshot(totalRendimientos, totalDeudas) {
    mostramos, más una estimación en vivo de lo que llevas ganado hoy.
    ====================================================================== */
 function initGananciasTracker() {
-  const today = todayISO();
-  const payload = { acumulado: 0, resetTs: Date.now(), ultimaFechaAcreditada: today, historial: {} };
+  // Nota: esto NO afecta el crecimiento diario de saldos (patrimonio/crecimiento
+  // tiene su propia guardia en el servidor) — reiniciar este contador solo pone
+  // en $0 lo acumulado, tus cuentas siguen creciendo normal.
+  const payload = { acumulado: 0, resetTs: Date.now(), historial: {} };
   db.ref('patrimonio/ganancias').set(payload);
 }
 
@@ -596,6 +616,15 @@ function renderRendimientos() {
         '</tbody></table>';
     }
 
+    const topeProj = genericTopeProjection(cuenta);
+    if (topeProj?.estado === 'alcanzado') {
+      extraHtml += `<div class="link-badge">🔔 Ya llegó a tu tope de ${fmtMoney(topeProj.monto)}</div>`;
+    } else if (topeProj?.estado === 'proyectado') {
+      extraHtml += `<div class="link-badge">🔔 Vas a llegar a ${fmtMoney(topeProj.monto)} el <b>${fmtDate(topeProj.fechaProyectada)}</b> (${topeProj.diasRestantes} días) · alerta ${topeProj.diasAviso} días antes</div>`;
+    } else if (topeProj?.estado === 'sin_crecimiento') {
+      extraHtml += `<div class="link-badge">🔔 Tope configurado en ${fmtMoney(topeProj.monto)}, sin crecimiento suficiente para proyectar fecha</div>`;
+    }
+
     card.innerHTML = `
       <div class="row">
         <div>
@@ -613,7 +642,8 @@ function renderRendimientos() {
         <span>90 días: ${fmtMoney(p90)}</span>
         <span>365 días: ${fmtMoney(p365)}</span>
       </div>
-      <div class="btn-row" style="margin-top:10px;">
+      <p class="muted" style="font-size:11px;margin-top:8px;">El saldo crece solo cada día a las 6am. "Actualizar saldo" es para correcciones manuales.</p>
+      <div class="btn-row" style="margin-top:6px;">
         <button class="btn sm" data-action="edit-rendimiento" data-id="${id}">Actualizar saldo</button>
         <button class="btn sm danger" data-action="delete-rendimiento" data-id="${id}">Eliminar</button>
       </div>
@@ -748,6 +778,15 @@ function openRendimientoForm(id) {
       </select>
     </div>` : `<input type="hidden" id="f-tipo" value="${tipo}" /><input type="hidden" id="f-nombre" value="${cuenta.nombre}" />`}
     <div id="f-dynamic"></div>
+    <div class="divider"></div>
+    <div class="field">
+      <label><input type="checkbox" id="f-tope-activo" ${cuenta?.notificarTope?.activo ? 'checked' : ''} style="width:auto;vertical-align:middle;margin-right:6px;" />Notificarme por correo cuando esta cuenta llegue a</label>
+      <input id="f-tope-monto" type="number" step="0.01" placeholder="Ej. 50000" value="${cuenta?.notificarTope?.monto ?? ''}" />
+    </div>
+    <div class="field">
+      <label>Avisar con cuántos días de anticipación</label>
+      <input id="f-tope-dias" type="number" min="1" max="30" value="${cuenta?.notificarTope?.diasAviso ?? 5}" />
+    </div>
     <div class="btn-row" style="margin-top:12px;">
       <button class="btn primary block" id="f-save">Guardar</button>
     </div>
@@ -825,6 +864,19 @@ function openRendimientoForm(id) {
       payload.tasaAnual = (parseFloat(modal.querySelector('#f-tasa').value) || 0) / 100;
     }
 
+    const topeActivo = modal.querySelector('#f-tope-activo').checked;
+    const topeMontoRaw = modal.querySelector('#f-tope-monto').value;
+    if (topeActivo && topeMontoRaw !== '') {
+      const monto = parseFloat(topeMontoRaw);
+      const diasAviso = parseInt(modal.querySelector('#f-tope-dias').value, 10) || 5;
+      const prevTope = cuenta?.notificarTope;
+      // Si el monto objetivo cambió, vuelve a avisar aunque antes ya se hubiera notificado ese tope.
+      const notificadoLlegada = (prevTope && prevTope.monto === monto) ? !!prevTope.notificadoLlegada : false;
+      payload.notificarTope = { activo: true, monto, diasAviso, notificadoLlegada };
+    } else {
+      payload.notificarTope = null;
+    }
+
     const targetId = id || uid();
     const prevBalance = cuenta ? rendimientoBalanceHoy(cuenta) : null;
     db.ref('patrimonio/rendimientos/' + targetId).update(payload).then(() => {
@@ -848,22 +900,16 @@ function deleteRendimiento(id) {
 function openInterestLogForm(id) {
   const cuenta = state.rendimientos[id];
   const modal = renderModal(`Registrar interés — ${cuenta.nombre}`, `
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">El saldo de esta cuenta ya crece solo cada día. Esto solo afina la proyección de la fecha en que llega a su tope, con el interés real que te pagó el banco.</p>
     <div class="field"><label>Fecha</label><input id="f-fecha" type="date" value="${todayISO()}" /></div>
     <div class="field"><label>Monto del interés (MXN)</label><input id="f-monto" type="number" step="0.01" placeholder="9.72" /></div>
-    <div class="field"><label>Sumar al saldo también</label>
-      <select id="f-sumar"><option value="si">Sí, sumarlo al saldo actual</option><option value="no">No, solo registrar el dato</option></select>
-    </div>
     <button class="btn primary block" id="f-save">Guardar</button>
   `);
   modal.querySelector('#f-save').addEventListener('click', () => {
     const fecha = modal.querySelector('#f-fecha').value;
     const monto = parseFloat(modal.querySelector('#f-monto').value);
-    const sumar = modal.querySelector('#f-sumar').value === 'si';
     if (!fecha || Number.isNaN(monto)) { toast('Completa fecha y monto'); return; }
-    const updates = {};
-    updates[`patrimonio/rendimientos/${id}/historialInteres/${uid()}`] = { fecha, monto };
-    if (sumar) updates[`patrimonio/rendimientos/${id}/saldo`] = (cuenta.saldo || 0) + monto;
-    db.ref().update(updates).then(() => {
+    db.ref(`patrimonio/rendimientos/${id}/historialInteres/${uid()}`).set({ fecha, monto }).then(() => {
       logMovimiento({ tipo: 'rendimiento', refId: id, nombre: cuenta.nombre, nota: `Interés registrado: ${fmtMoney(monto)} (${fecha})` });
       toast('Interés registrado');
       closeModal();
@@ -969,7 +1015,18 @@ function renderModal(title, bodyHtml) {
     </div>
   `;
   document.getElementById('modal-close').addEventListener('click', closeModal);
-  document.getElementById('modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
+  // Cierra solo si TANTO el mousedown como el click cayeron en el fondo mismo.
+  // Si no se checa el mousedown, seleccionar texto arrastrando el mouse dentro de un
+  // input y soltar fuera del modal dispara un "click" sintético sobre el fondo
+  // (el navegador lo asigna al ancestro común de mousedown/mouseup) y cierra el
+  // modal sin querer, borrando lo que se estaba editando.
+  const backdrop = document.getElementById('modal-backdrop');
+  let mouseDownOnBackdrop = false;
+  backdrop.addEventListener('mousedown', (e) => { mouseDownOnBackdrop = e.target.id === 'modal-backdrop'; });
+  backdrop.addEventListener('click', (e) => {
+    if (e.target.id === 'modal-backdrop' && mouseDownOnBackdrop) closeModal();
+    mouseDownOnBackdrop = false;
+  });
   return root;
 }
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
