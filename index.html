@@ -129,6 +129,24 @@
     <div id="pending-note" class="muted" style="font-size:11px;margin-top:8px;"></div>
   </div>
 
+  <!-- GANANCIAS -->
+  <div class="card" id="zone-ganancias">
+    <div class="row">
+      <span class="muted" style="font-size:12px;">GANANCIA ACUMULADA</span>
+      <button class="btn ghost sm" id="reset-ganancias-btn">Reiniciar</button>
+    </div>
+    <div class="amount green" id="ganancia-acumulada">—</div>
+    <div id="ganancia-desde" class="muted" style="font-size:11px;margin-top:2px;"></div>
+    <div class="divider"></div>
+    <div class="row">
+      <div>
+        <div class="muted" style="font-size:12px;">Hoy vas generando (estimado)</div>
+        <div class="amount sm" id="ganancia-hoy">—</div>
+      </div>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:8px;">Se acredita solo, todos los días a las 6am hora CDMX, con base en tus saldos y tasas actuales.</p>
+  </div>
+
   <div class="tabs">
     <button class="tab active" data-tab="rendimientos">Rendimientos</button>
     <button class="tab" data-tab="deudas">Deudas</button>
@@ -317,6 +335,29 @@ function klarGroupDailyInterest(cuentas) {
   return out;
 }
 
+// Cuánto generan TODAS las cuentas hoy, con base en sus saldos y tasas actuales.
+// Para Revolut, solo cuenta la parte dentro del tope de nivel 1 (la tasa del
+// excedente sigue pendiente de confirmar, así que ese excedente no se suma).
+// Esta misma función corre en el navegador (index.html) y en la Netlify
+// Function (daily-alerts.js) — mantenlas iguales si la editas.
+function totalDailyGain(rendimientos) {
+  let total = 0;
+  for (const cuenta of Object.values(rendimientos || {})) {
+    if (cuenta.tipo === 'grupo_colector') {
+      for (const sub of Object.values(cuenta.cuentas || {})) {
+        total += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
+      }
+    } else if (cuenta.tipo === 'escalonado_predictivo') {
+      const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
+      const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
+      total += Math.min(cuenta.saldo || 0, tope) * (tasa1 / 365);
+    } else {
+      total += (cuenta.saldo || 0) * ((cuenta.tasaAnual || 0) / 365);
+    }
+  }
+  return total;
+}
+
 // Simula N días del grupo Klar: c1 y c2 generan interés que se deposita en
 // c3 (su propio saldo no crece), y c3 compone su propio interés + lo recibido.
 function klarProjectBalances(cuentas, days) {
@@ -370,7 +411,7 @@ function rendimientoProjectTotal(cuenta, days) {
 }
 
 /* ============================ APP STATE ================================ */
-let state = { rendimientos: {}, deudas: {}, movimientos: {}, snapshots: {} };
+let state = { rendimientos: {}, deudas: {}, movimientos: {}, snapshots: {}, ganancias: null };
 let currentTab = 'rendimientos';
 let appInitialized = false;
 
@@ -382,6 +423,10 @@ function initApp() {
   db.ref('patrimonio/deudas').on('value', (snap) => { state.deudas = snap.val() || {}; render(); });
   db.ref('patrimonio/movimientos').limitToLast(50).on('value', (snap) => { state.movimientos = snap.val() || {}; render(); });
   db.ref('patrimonio/snapshots').limitToLast(60).on('value', (snap) => { state.snapshots = snap.val() || {}; render(); });
+  db.ref('patrimonio/ganancias').on('value', (snap) => {
+    if (snap.val()) { state.ganancias = snap.val(); render(); }
+    else initGananciasTracker(); // primera vez: arranca el contador en ceros desde hoy
+  });
 
   document.querySelectorAll('.tab').forEach(tabEl => {
     tabEl.addEventListener('click', () => {
@@ -396,6 +441,7 @@ function initApp() {
   document.getElementById('add-rendimiento-btn').addEventListener('click', () => openRendimientoForm());
   document.getElementById('add-deuda-btn').addEventListener('click', () => openDeudaForm());
   document.getElementById('seed-btn').addEventListener('click', seedInitialData);
+  document.getElementById('reset-ganancias-btn').addEventListener('click', resetGananciasTracker);
 }
 
 /* ============================ MOVEMENT LOG ============================= */
@@ -419,15 +465,48 @@ function recordSnapshot(totalRendimientos, totalDeudas) {
   else db.ref('patrimonio/snapshots').push(payload);
 }
 
+/* ============================ GANANCIA DIARIA ===========================
+   El acumulado sube solo, un día a la vez: lo acredita la Netlify Function
+   (netlify/functions/daily-alerts.js) cada mañana a las 6am CDMX, sumando lo
+   que generaron tus cuentas ese día (totalDailyGain). Aquí solo lo leemos y
+   mostramos, más una estimación en vivo de lo que llevas ganado hoy.
+   ====================================================================== */
+function initGananciasTracker() {
+  const today = todayISO();
+  const payload = { acumulado: 0, resetTs: Date.now(), ultimaFechaAcreditada: today, historial: {} };
+  db.ref('patrimonio/ganancias').set(payload);
+}
+
+function resetGananciasTracker() {
+  if (!confirm('¿Reiniciar el contador de ganancias acumuladas a $0? Esto no afecta tus saldos, solo el contador.')) return;
+  initGananciasTracker();
+  toast('Contador de ganancias reiniciado');
+}
+
 /* ============================== RENDER ================================= */
 function render() {
   renderZoneA();
+  renderGanancias();
   renderRendimientos();
   renderDeudas();
   renderHistorial();
   renderChart();
   const empty = Object.keys(state.rendimientos).length === 0 && Object.keys(state.deudas).length === 0;
   document.getElementById('seed-banner').classList.toggle('hidden', !empty);
+}
+
+function renderGanancias() {
+  const hoy = totalDailyGain(state.rendimientos);
+  document.getElementById('ganancia-hoy').textContent = fmtMoney(hoy);
+  if (!state.ganancias) {
+    document.getElementById('ganancia-acumulada').textContent = fmtMoney(0);
+    document.getElementById('ganancia-desde').textContent = '';
+    return;
+  }
+  document.getElementById('ganancia-acumulada').textContent = fmtMoney(state.ganancias.acumulado || 0);
+  document.getElementById('ganancia-desde').textContent = state.ganancias.resetTs
+    ? `Desde el ${fmtDate(state.ganancias.resetTs)}`
+    : '';
 }
 
 function renderZoneA() {

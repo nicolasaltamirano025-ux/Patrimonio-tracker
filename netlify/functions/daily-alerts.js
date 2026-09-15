@@ -111,6 +111,42 @@ function buildRevolutAlert(proj) {
   return { key: 'revolut_predictivo', subject: 'Patrimonio Tracker — Revolut cerca de su tope', html };
 }
 
+// Misma lógica que totalDailyGain() en index.html — mantenlas iguales si se edita una.
+// El excedente de Revolut sobre su tope no se cuenta mientras su tasa siga pendiente.
+function totalDailyGain(rendimientos) {
+  let total = 0;
+  for (const cuenta of Object.values(rendimientos || {})) {
+    if (cuenta.tipo === 'grupo_colector') {
+      for (const sub of Object.values(cuenta.cuentas || {})) {
+        total += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
+      }
+    } else if (cuenta.tipo === 'escalonado_predictivo') {
+      const tope = cuenta.tasas?.[0]?.hasta ?? Infinity;
+      const tasa1 = cuenta.tasas?.[0]?.tasaAnual ?? 0;
+      total += Math.min(cuenta.saldo || 0, tope) * (tasa1 / 365);
+    } else {
+      total += (cuenta.saldo || 0) * ((cuenta.tasaAnual || 0) / 365);
+    }
+  }
+  return total;
+}
+
+// Acredita al contador de ganancias lo que generaron las cuentas hoy, una sola
+// vez por día (idempotente si la función corre más de una vez el mismo día).
+// El usuario puede reiniciar este contador a $0 desde la app cuando quiera.
+async function accrueDailyGain(db, rendimientos, today) {
+  const ref = db.ref('patrimonio/ganancias');
+  const snap = await ref.once('value');
+  const g = snap.val() || { acumulado: 0, resetTs: Date.now(), historial: {} };
+  if (g.ultimaFechaAcreditada === today) return; // ya se acreditó hoy
+  const gananciaHoy = totalDailyGain(rendimientos);
+  await ref.update({
+    acumulado: (g.acumulado || 0) + gananciaHoy,
+    ultimaFechaAcreditada: today,
+    [`historial/${today}`]: gananciaHoy,
+  });
+}
+
 export default async () => {
   const app = initAdmin();
   const db = app.database();
@@ -123,6 +159,8 @@ export default async () => {
   ]);
   const rendimientos = rendimientosSnap.val() || {};
   const deudas = deudasSnap.val() || {};
+
+  await accrueDailyGain(db, rendimientos, today);
 
   const alerts = [];
 
@@ -150,7 +188,7 @@ export default async () => {
     sent += 1;
   }
 
-  return new Response(JSON.stringify({ ok: true, evaluated: alerts.length, sent }), {
+  return new Response(JSON.stringify({ ok: true, evaluated: alerts.length, sent, gananciaHoy: totalDailyGain(rendimientos) }), {
     headers: { 'content-type': 'application/json' },
   });
 };

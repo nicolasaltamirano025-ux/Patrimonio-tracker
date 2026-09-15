@@ -92,6 +92,7 @@ patrimonio/
       diaCorte, diaVencimiento, diaNotificacion, cuentaRendimientoVinculadaId, notas
   movimientos/       # historial combinado, editable/eliminable
   snapshots/          # {fecha, totalRendimientos, totalDeudas, patrimonioNeto} — uno por día, alimenta la gráfica y la tendencia
+  ganancias/          # { acumulado, resetTs, ultimaFechaAcreditada, historial: {fecha: gananciaDelDia} }
   alertsLog/{fecha}/{clave}: true   # evita reenviar la misma alerta el mismo día
 ```
 
@@ -104,6 +105,9 @@ La app detecta si `patrimonio/` está vacío y muestra un banner **"Cargar datos
 - Fecha proyectada de Revolut y fecha de alerta (proyección − 5 días), usando el promedio móvil de interés diario **registrado**, no la tasa nominal.
 - Total de deudas conocidas (excluye montos "pendiente", los marca explícitamente).
 - Patrimonio neto y su tendencia vs. el snapshot anterior.
+
+## Contador de ganancias
+La tarjeta "Ganancia acumulada" arranca en $0 desde que se creó, y sube sola un día a la vez: la misma Netlify Function que manda las alertas (corre todos los días a las 6am CDMX) suma lo que generaron tus cuentas ese día (`totalDailyGain`, con base en saldos y tasas actuales) al acumulado, sin que tengas que abrir la app. El botón "Reiniciar" en esa tarjeta lo regresa a $0 en cualquier momento — no toca tus saldos, solo el contador. "Hoy vas generando" es una estimación en vivo (se recalcula cada vez que abres la app) de lo que se va a acreditar cuando corra la función.
 
 ## Qué NO hace la app (para no asumir datos)
 - No calcula nada sobre la tasa de excedente de Revolut mientras esté marcada `pendiente` — solo avisa.
