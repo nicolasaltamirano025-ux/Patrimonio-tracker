@@ -124,10 +124,17 @@ function buildTopeReachedAlert(cuenta, id, monto) {
   return { key: `tope_alcanzado_${id}`, subject: `Patrimonio Tracker — ${cuenta.nombre} llegó a su tope`, html };
 }
 
+function buildActionReminderEmail(cuenta, id) {
+  const html = `<h2>Recordatorio — ${cuenta.nombre}</h2><p>${cuenta.recordatorioAccion.nota || 'Revisar esta cuenta.'}</p>`;
+  return { key: `accion_${id}`, subject: `Patrimonio Tracker — Recordatorio: ${cuenta.nombre}`, html };
+}
+
 // Cuánto genera UNA cuenta hoy, con base en su saldo y tasa actuales. Misma
 // lógica que dailyGrowthForAccount() en index.html — mantenlas iguales si se
 // edita una. El excedente de Revolut sobre su tope no cuenta mientras su tasa
-// siga pendiente; Klar cuenta el interés total del grupo (fluya donde fluya).
+// siga pendiente; Klar cuenta el interés total del grupo (fluya donde fluya);
+// una cuenta "no_compuesto" (ej. Finsus) genera con su propia tasa, pero ese
+// monto se deposita en otra cuenta (ver computeDailyGrowth), no en sí misma.
 function dailyGrowthForAccount(cuenta) {
   if (cuenta.tipo === 'grupo_colector') {
     return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + (c.saldo || 0) * ((c.tasaAnual || 0) / 365), 0);
@@ -144,6 +151,15 @@ function totalDailyGain(rendimientos) {
   return Object.values(rendimientos || {}).reduce((s, c) => s + dailyGrowthForAccount(c), 0);
 }
 
+// Cuánto recibe la cuenta `id` hoy de otras cuentas "no_compuesto" que apuntan a ella.
+function dailyInflow(id, rendimientos) {
+  let total = 0;
+  for (const c of Object.values(rendimientos || {})) {
+    if (c.tipo === 'no_compuesto' && c.cuentaDestinoId === id) total += dailyGrowthForAccount(c);
+  }
+  return total;
+}
+
 function balanceHoy(cuenta) {
   if (cuenta.tipo === 'grupo_colector') return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + (c.saldo || 0), 0);
   return cuenta.saldo || 0;
@@ -152,31 +168,71 @@ function balanceHoy(cuenta) {
 // Hace crecer el saldo REAL de cada cuenta con el interés de hoy (una vez al
 // día). En Klar, el interés de las 3 subcuentas se deposita completo en la
 // cuenta colectora (la que no tiene destinoInteresId) — c1 y c2 mantienen su
-// principal. Devuelve los updates a escribir y las cuentas ya actualizadas
-// (para que las alertas de tope de este mismo día usen el saldo ya crecido).
+// principal. Una cuenta "no_compuesto" (ej. Finsus) nunca crece su propio
+// saldo: lo que genera se deposita en su cuentaDestinoId. Se calcula primero
+// lo que genera CADA cuenta con el saldo de inicio del día, y hasta el final
+// se aplican los cambios, para que un redireccionamiento no se cuente dos
+// veces. Devuelve los updates a escribir y las cuentas ya actualizadas (para
+// que las alertas de tope de este mismo día usen el saldo ya crecido).
 function computeDailyGrowth(rendimientos) {
-  const updates = {};
   const rendimientosActualizados = {};
   let total = 0;
+
+  // Fase 1: lo que genera CADA cuenta hoy, con el saldo de inicio del día (Klar se
+  // resuelve aparte más abajo, es un grupo cerrado que no depende de nada externo).
+  const generado = {};
   for (const [id, cuenta] of Object.entries(rendimientos || {})) {
-    if (cuenta.tipo === 'grupo_colector') {
-      const cuentas = cuenta.cuentas || {};
-      let interesTotal = 0;
-      for (const sub of Object.values(cuentas)) interesTotal += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
-      const collectorId = Object.entries(cuentas).find(([, s]) => !s.destinoInteresId)?.[0];
-      const nuevasCuentas = { ...cuentas };
-      if (collectorId) {
-        nuevasCuentas[collectorId] = { ...cuentas[collectorId], saldo: (cuentas[collectorId].saldo || 0) + interesTotal };
-        updates[`patrimonio/rendimientos/${id}/cuentas/${collectorId}/saldo`] = nuevasCuentas[collectorId].saldo;
-      }
-      rendimientosActualizados[id] = { ...cuenta, cuentas: nuevasCuentas };
-      total += interesTotal;
+    if (cuenta.tipo !== 'grupo_colector') { generado[id] = dailyGrowthForAccount(cuenta); total += generado[id]; }
+  }
+
+  // Fase 2: Klar compone internamente (c1/c2 fluyen a c3).
+  for (const [id, cuenta] of Object.entries(rendimientos || {})) {
+    if (cuenta.tipo !== 'grupo_colector') continue;
+    const cuentas = cuenta.cuentas || {};
+    let interesTotal = 0;
+    for (const sub of Object.values(cuentas)) interesTotal += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
+    const collectorId = Object.entries(cuentas).find(([, s]) => !s.destinoInteresId)?.[0];
+    const nuevasCuentas = { ...cuentas };
+    if (collectorId) nuevasCuentas[collectorId] = { ...cuentas[collectorId], saldo: (cuentas[collectorId].saldo || 0) + interesTotal };
+    rendimientosActualizados[id] = { ...cuenta, cuentas: nuevasCuentas };
+    total += interesTotal;
+  }
+
+  // Fase 3: cada cuenta (no colectora) se queda con su propio crecimiento, salvo las
+  // "no_compuesto" con destino, que no crecen en sí mismas (fase 4 lo redirige).
+  for (const [id, cuenta] of Object.entries(rendimientos || {})) {
+    if (cuenta.tipo === 'grupo_colector') continue;
+    if (cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId && rendimientos[cuenta.cuentaDestinoId]) {
+      rendimientosActualizados[id] = { ...cuenta };
     } else {
-      const interes = dailyGrowthForAccount(cuenta);
-      const nuevoSaldo = (cuenta.saldo || 0) + interes;
-      updates[`patrimonio/rendimientos/${id}/saldo`] = nuevoSaldo;
-      rendimientosActualizados[id] = { ...cuenta, saldo: nuevoSaldo };
-      total += interes;
+      rendimientosActualizados[id] = { ...cuenta, saldo: (cuenta.saldo || 0) + generado[id] };
+    }
+  }
+
+  // Fase 4: deposita lo generado por cada "no_compuesto" en su cuenta destino (ya con
+  // el crecimiento propio de esa destino ya aplicado en la fase 3).
+  for (const [id, cuenta] of Object.entries(rendimientos || {})) {
+    if (cuenta.tipo !== 'no_compuesto' || !cuenta.cuentaDestinoId || !rendimientos[cuenta.cuentaDestinoId]) continue;
+    const destino = rendimientosActualizados[cuenta.cuentaDestinoId];
+    if (destino.tipo === 'grupo_colector') {
+      const cuentasDestino = destino.cuentas || {};
+      const collectorId = Object.entries(cuentasDestino).find(([, s]) => !s.destinoInteresId)?.[0];
+      if (collectorId) {
+        cuentasDestino[collectorId] = { ...cuentasDestino[collectorId], saldo: (cuentasDestino[collectorId].saldo || 0) + generado[id] };
+      }
+    } else {
+      destino.saldo = (destino.saldo || 0) + generado[id];
+    }
+  }
+
+  const updates = {};
+  for (const [id, cuenta] of Object.entries(rendimientosActualizados)) {
+    if (cuenta.tipo === 'grupo_colector') {
+      for (const [subId, sub] of Object.entries(cuenta.cuentas || {})) {
+        updates[`patrimonio/rendimientos/${id}/cuentas/${subId}/saldo`] = sub.saldo;
+      }
+    } else {
+      updates[`patrimonio/rendimientos/${id}/saldo`] = cuenta.saldo;
     }
   }
   return { updates, total, rendimientosActualizados };
@@ -250,12 +306,18 @@ export default async () => {
       }
       continue;
     }
-    const daily = dailyGrowthForAccount(cuenta);
+    const propio = (cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId) ? 0 : dailyGrowthForAccount(cuenta);
+    const daily = propio + dailyInflow(id, rendimientos);
     if (!daily || daily <= 0) continue;
     const diasRestantes = Math.ceil((conf.monto - saldoActual) / daily);
     const fechaProyectada = addDaysISO(today, diasRestantes);
     const fechaAlerta = addDaysISO(fechaProyectada, -(conf.diasAviso || 5));
     if (fechaAlerta === today) alerts.push(buildTopeAlert(cuenta, id, { monto: conf.monto, fechaProyectada }));
+  }
+
+  for (const [id, cuenta] of Object.entries(rendimientos)) {
+    const rec = cuenta.recordatorioAccion;
+    if (rec?.activo && rec.diaMes === dayOfMonth) alerts.push(buildActionReminderEmail(cuenta, id));
   }
 
   if (Object.keys(topeUpdates).length) await db.ref().update(topeUpdates);

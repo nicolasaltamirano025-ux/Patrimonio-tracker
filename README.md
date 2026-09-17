@@ -80,13 +80,15 @@ git push
 patrimonio/
   rendimientos/
     {id}/
-      tipo: "simple" | "escalonado_predictivo" | "declining_vinculado" | "grupo_colector"
-      nombre, saldo, tasaAnual        # tipo simple / declining_vinculado
+      tipo: "simple" | "escalonado_predictivo" | "declining_vinculado" | "grupo_colector" | "no_compuesto"
+      nombre, saldo, tasaAnual        # tipo simple / declining_vinculado / no_compuesto
       tasas: [{hasta, tasaAnual}, {desde, tasaAnual|null, pendiente}]  # escalonado_predictivo
       historialInteres: { {id}: {fecha, monto} }                       # escalonado_predictivo, solo afina la proyección
       deudaVinculadaId, cicloDia                                       # declining_vinculado
       cuentas: { c1: {...}, c2: {...}, c3: {...} }                     # grupo_colector
+      cuentaDestinoId                                                  # no_compuesto: a dónde se va su rendimiento
       notificarTope: { activo, monto, diasAviso, notificadoLlegada }   # opcional, cualquier tipo
+      recordatorioAccion: { activo, diaMes, nota }                     # opcional, cualquier tipo
   deudas/
     {id}/
       institucion, montoTotal, montoPendiente, pagoMensual, pagoMensualPendiente,
@@ -115,7 +117,13 @@ La misma Netlify Function que manda las alertas (corre todos los días a las 6am
 La tarjeta "Ganancia acumulada" arranca en $0 desde que se creó, y sube sola un día a la vez: cada vez que la función hace crecer los saldos, suma ese mismo monto al acumulado. El botón "Reiniciar" en esa tarjeta lo regresa a $0 en cualquier momento — no toca tus saldos ni el crecimiento diario, solo el contador (están desacoplados a propósito: `patrimonio/crecimiento` es la guardia real de "ya crecieron los saldos hoy", `patrimonio/ganancias` es solo el contador visible y reiniciable). "Hoy vas generando" es una estimación en vivo (se recalcula cada vez que abres la app) de lo que se va a acreditar cuando corra la función.
 
 ## Rendimiento cuando termines de pagar tu deuda
-Nueva tarjeta en el dashboard (solo aparece si todas tus deudas tienen monto y pago mensual definidos — mientras falte alguno, te dice cuáles). Simula, día a día en el navegador, cómo tus deudas bajan con su pago mensual mientras tus cuentas de rendimiento siguen creciendo, y detiene el retiro mensual hacia la cuenta de Nu en cuanto ESA deuda específica llega a $0. Muestra la fecha estimada en que quedas sin deuda y cuánto tendrías generando ese día (total y por día/mes). Es una proyección con tus tasas y pagos actuales, no una promesa — no considera depósitos, retiros o cambios de tasa futuros.
+Tarjeta en el dashboard que solo toma en cuenta las deudas VINCULADAS a una cuenta de rendimiento (hoy: Nu) — las demás no cambian lo que generan tus cuentas, así que no bloquean esta proyección aunque no tengan pago mensual definido. Simula día a día cómo esa(s) deuda(s) vinculada(s) bajan con su pago mensual mientras tus cuentas siguen creciendo, deteniendo el retiro en cuanto esa deuda específica llega a $0. Muestra la fecha estimada y cuánto tendrías generando ese día (total y por día/mes). Si ninguna deuda está vinculada, muestra directamente lo que generan tus cuentas hoy (pagar deuda no vinculada no cambia ese número). Es una proyección con tus tasas y pagos actuales, no una promesa.
+
+## Cuenta sin interés compuesto (tipo "no_compuesto")
+Para cuentas como Finsus, donde el rendimiento no se queda ahí: tú lo retiras y lo metes a otra cuenta. Al crearla, elige el tipo "Sin interés compuesto" y la cuenta destino. Su propio saldo nunca crece — lo que genera cada día se deposita automáticamente en la cuenta destino (tanto en el crecimiento diario real como en las proyecciones a 30/90/365 días y en la alerta de tope). La tarjeta de origen muestra a dónde se va su rendimiento; la de destino muestra de dónde lo recibe.
+
+## Recordatorio mensual de acción
+Cualquier cuenta de rendimiento puede tener un recordatorio mensual de "hay que hacer algo aquí" (ej. "mover el rendimiento de Finsus a Klar"), con su propio día del mes y nota libre — se configura en el mismo formulario que el tope. Llega por correo ese día, igual que las alertas de deuda.
 
 ## Notificación de tope por cuenta
 En el formulario de cada cuenta de rendimiento (botón "Actualizar saldo") hay una opción para activar "Notificarme cuando esta cuenta llegue a $X", con cuántos días de anticipación avisar (5 por defecto). Aplica a cualquier tipo de cuenta, no solo Revolut (que ya tiene su propia alerta dedicada basada en interés real registrado). La función diaria evalúa la proyección con la tasa nominal de la cuenta y manda el correo el día calculado; si el saldo ya alcanzó el tope, manda un aviso único de "ya llegaste".

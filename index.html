@@ -365,15 +365,27 @@ function totalDailyGain(rendimientos) {
   return Object.values(rendimientos || {}).reduce((s, c) => s + dailyGrowthForAccount(c), 0);
 }
 
+// Cuánto recibe la cuenta `id` hoy de otras cuentas "no_compuesto" que apuntan a ella
+// (ver tipo no_compuesto más abajo: Finsus-style, no acumula en sí misma).
+function dailyInflow(id, rendimientos) {
+  let total = 0;
+  for (const c of Object.values(rendimientos || {})) {
+    if (c.tipo === 'no_compuesto' && c.cuentaDestinoId === id) total += dailyGrowthForAccount(c);
+  }
+  return total;
+}
+
 // Proyección genérica de "notificarme cuando esta cuenta llegue a $X", disponible
 // para cualquier tipo de cuenta (no solo Revolut). Usa la tasa nominal, ya que a
 // diferencia de Revolut no hay un historial de interés real registrado para promediar.
-function genericTopeProjection(cuenta) {
+function genericTopeProjection(id, cuenta) {
   const conf = cuenta.notificarTope;
   if (!conf || !conf.activo || !conf.monto) return null;
   const saldoActual = rendimientoBalanceHoy(cuenta);
   if (saldoActual >= conf.monto) return { estado: 'alcanzado', monto: conf.monto };
-  const daily = dailyGrowthForAccount(cuenta);
+  // Una "no_compuesto" con destino nunca crece su propio saldo — todo se redirige.
+  const propio = (cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId) ? 0 : dailyGrowthForAccount(cuenta);
+  const daily = propio + dailyInflow(id, state.rendimientos);
   if (!daily || daily <= 0) return { estado: 'sin_crecimiento', monto: conf.monto };
   const diasAviso = conf.diasAviso || 5;
   const diasRestantes = Math.ceil((conf.monto - saldoActual) / daily);
@@ -383,13 +395,15 @@ function genericTopeProjection(cuenta) {
 }
 
 // Simula N días del grupo Klar: c1 y c2 generan interés que se deposita en
-// c3 (su propio saldo no crece), y c3 compone su propio interés + lo recibido.
-function klarProjectBalances(cuentas, days) {
+// c3 (su propio saldo no crece), y c3 compone su propio interés + lo recibido
+// + cualquier inflowDiario que le llegue de una cuenta "no_compuesto" externa.
+function klarProjectBalances(cuentas, days, inflowDiario = 0) {
   const state = {};
   for (const [id, c] of Object.entries(cuentas)) state[id] = c.saldo;
   const collectorIds = Object.entries(cuentas).filter(([, c]) => c.destinoInteresId).map(([id]) => id);
   const collectorTarget = {};
   for (const [id, c] of Object.entries(cuentas)) if (c.destinoInteresId) collectorTarget[id] = c.destinoInteresId;
+  const collectorId = Object.entries(cuentas).find(([, c]) => !c.destinoInteresId)?.[0];
   for (let d = 0; d < days; d++) {
     const interestToday = {};
     for (const [id, c] of Object.entries(cuentas)) interestToday[id] = state[id] * (c.tasaAnual / 365);
@@ -401,6 +415,7 @@ function klarProjectBalances(cuentas, days) {
     for (const [id, c] of Object.entries(cuentas)) {
       if (!c.destinoInteresId) state[id] += interestToday[id]; // la colectora compone
     }
+    if (collectorId) state[collectorId] += inflowDiario;
   }
   return state;
 }
@@ -412,9 +427,13 @@ function rendimientoBalanceHoy(cuenta) {
   return cuenta.saldo;
 }
 
-function rendimientoProjectTotal(cuenta, days) {
+function rendimientoProjectTotal(id, cuenta, days, rendimientosMap) {
+  if (cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId) {
+    return cuenta.saldo; // no compone en sí misma: su saldo se queda plano, todo se va a otra cuenta
+  }
+  const inflowDiario = dailyInflow(id, rendimientosMap);
   if (cuenta.tipo === 'grupo_colector') {
-    const final = klarProjectBalances(cuenta.cuentas, days);
+    const final = klarProjectBalances(cuenta.cuentas, days, inflowDiario);
     return Object.values(final).reduce((s, v) => s + v, 0);
   }
   if (cuenta.tipo === 'escalonado_predictivo') {
@@ -424,49 +443,74 @@ function rendimientoProjectTotal(cuenta, days) {
     let saldo = cuenta.saldo;
     for (let d = 0; d < days; d++) {
       if (saldo >= tope) return { saldo, capped: true };
-      saldo += saldo * (tasa1 / 365);
+      saldo += saldo * (tasa1 / 365) + inflowDiario;
     }
     return { saldo, capped: false };
   }
-  // simple y declining_vinculado: interés compuesto diario a tasa fija
+  // simple y declining_vinculado: interés compuesto diario a tasa fija + lo que reciba de otras cuentas
   let saldo = cuenta.saldo;
-  for (let d = 0; d < days; d++) saldo += saldo * (cuenta.tasaAnual / 365);
+  for (let d = 0; d < days; d++) saldo += saldo * (cuenta.tasaAnual / 365) + inflowDiario;
   return saldo;
 }
 
 // Le suma a CADA cuenta de un set simulado su interés de un día (muta el objeto).
-// Misma lógica que computeDailyGrowth() del lado servidor: en Klar, el interés
-// de las 3 subcuentas se deposita completo en la colectora.
+// Misma lógica que computeDailyGrowth() del lado servidor: en Klar, el interés de
+// las 3 subcuentas se deposita completo en la colectora; una cuenta "no_compuesto"
+// (ej. Finsus) nunca crece su propio saldo, todo lo que genera se deposita en su
+// cuentaDestinoId. Se calcula primero lo que genera CADA cuenta con el saldo de
+// inicio del día, y hasta el final se aplican los cambios — así un redireccionamiento
+// no se cuenta dos veces ni se pisa entre cuentas procesadas en distinto orden.
 function applyOneDayGrowth(rendSim) {
+  const generado = {};
+  for (const [id, cuenta] of Object.entries(rendSim)) {
+    if (cuenta.tipo !== 'grupo_colector') generado[id] = dailyGrowthForAccount(cuenta);
+  }
   for (const cuenta of Object.values(rendSim)) {
-    if (cuenta.tipo === 'grupo_colector') {
-      let interesTotal = 0;
-      for (const sub of Object.values(cuenta.cuentas || {})) interesTotal += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
-      const collectorId = Object.entries(cuenta.cuentas || {}).find(([, s]) => !s.destinoInteresId)?.[0];
-      if (collectorId) cuenta.cuentas[collectorId].saldo += interesTotal;
+    if (cuenta.tipo !== 'grupo_colector') continue;
+    let interesTotal = 0;
+    for (const sub of Object.values(cuenta.cuentas || {})) interesTotal += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
+    const collectorId = Object.entries(cuenta.cuentas || {}).find(([, s]) => !s.destinoInteresId)?.[0];
+    if (collectorId) cuenta.cuentas[collectorId].saldo += interesTotal;
+  }
+  for (const [id, cuenta] of Object.entries(rendSim)) {
+    if (cuenta.tipo === 'grupo_colector') continue;
+    if (cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId && rendSim[cuenta.cuentaDestinoId]) {
+      const destino = rendSim[cuenta.cuentaDestinoId];
+      if (destino.tipo === 'grupo_colector') {
+        const collectorId = Object.entries(destino.cuentas || {}).find(([, s]) => !s.destinoInteresId)?.[0];
+        if (collectorId) destino.cuentas[collectorId].saldo += generado[id];
+      } else {
+        destino.saldo = (destino.saldo || 0) + generado[id];
+      }
     } else {
-      cuenta.saldo = (cuenta.saldo || 0) + dailyGrowthForAccount(cuenta);
+      cuenta.saldo = (cuenta.saldo || 0) + generado[id];
     }
   }
 }
 
-// Simula, día a día, cómo se van liquidando tus deudas con su pago mensual y
-// cómo siguen creciendo tus cuentas mientras tanto (el retiro mensual hacia
-// la deuda vinculada de Nu se detiene en cuanto ESA deuda llega a $0), hasta
-// que TODAS las deudas con pago mensual conocido quedan en $0. Solo funciona
-// si todas las deudas tienen monto y pago mensual definidos — si falta algún
-// dato, lo dice en vez de adivinar.
+// Simula, día a día, cómo se van liquidando SOLO las deudas que están vinculadas a
+// una cuenta de rendimiento (ej. Nu) con su pago mensual, deteniendo ese retiro en
+// cuanto esa deuda específica llega a $0, mientras todas tus cuentas siguen
+// creciendo. Las demás deudas (sin vínculo a ninguna cuenta) no afectan este
+// cálculo — pagarlas o no, no cambia lo que generan tus rendimientos. Si alguna
+// deuda VINCULADA no tiene monto o pago mensual definido, lo dice en vez de adivinar.
 function projectDebtFreeRendimiento() {
-  const deudasEntries = Object.entries(state.deudas);
-  const faltantes = deudasEntries.filter(([, d]) => d.montoPendiente || d.pagoMensualPendiente || !d.pagoMensual).map(([, d]) => d.institucion);
-  if (!deudasEntries.length || faltantes.length) {
-    return { disponible: false, faltantes };
+  const vinculadas = Object.entries(state.deudas).filter(([, d]) => d.cuentaRendimientoVinculadaId);
+  const faltantes = vinculadas.filter(([, d]) => d.montoPendiente || d.pagoMensualPendiente || !d.pagoMensual).map(([, d]) => d.institucion);
+  if (faltantes.length) return { disponible: false, faltantes };
+
+  if (!vinculadas.length) {
+    // Ninguna deuda está vinculada a una cuenta de rendimiento: pagar deuda no
+    // cambia nada en lo que generan tus cuentas — es simplemente lo de hoy.
+    const rendimientos = state.rendimientos;
+    const totalFinal = Object.values(rendimientos).reduce((s, c) => s + rendimientoBalanceHoy(c), 0);
+    const gananciaDiariaFinal = totalDailyGain(rendimientos);
+    return { disponible: true, sinVinculo: true, totalFinal, gananciaDiariaFinal, gananciaMensualFinal: gananciaDiariaFinal * 30 };
   }
 
   const deudaSaldos = {};
-  deudasEntries.forEach(([id, d]) => { deudaSaldos[id] = d.montoTotal; });
+  vinculadas.forEach(([id, d]) => { deudaSaldos[id] = d.montoTotal; });
   const rendSim = JSON.parse(JSON.stringify(state.rendimientos));
-  const nuEntry = Object.entries(rendSim).find(([, c]) => c.tipo === 'declining_vinculado' && c.deudaVinculadaId);
 
   const MAX_DIAS = 365 * 20; // resguardo: no proyectar más de 20 años
   let dia = 0;
@@ -474,12 +518,11 @@ function projectDebtFreeRendimiento() {
     dia++;
     applyOneDayGrowth(rendSim);
     if (dia % 30 === 0) {
-      for (const [id, d] of deudasEntries) {
+      for (const [id, d] of vinculadas) {
         if (deudaSaldos[id] > 0) {
           deudaSaldos[id] = Math.max(0, deudaSaldos[id] - d.pagoMensual);
-          if (nuEntry && nuEntry[1].deudaVinculadaId === id) {
-            rendSim[nuEntry[0]].saldo = Math.max(0, (rendSim[nuEntry[0]].saldo || 0) - d.pagoMensual);
-          }
+          const cuentaLigada = rendSim[d.cuentaRendimientoVinculadaId];
+          if (cuentaLigada) cuentaLigada.saldo = Math.max(0, (cuentaLigada.saldo || 0) - d.pagoMensual);
         }
       }
     }
@@ -590,16 +633,22 @@ function renderSinDeuda() {
     return;
   }
   if (!proj.disponible) {
-    el.innerHTML = proj.faltantes.length
-      ? `<p class="muted" style="font-size:12px;">Falta definir el pago mensual (o el monto) de: <b>${proj.faltantes.join(', ')}</b> para poder proyectar esto.</p>`
-      : '<p class="muted" style="font-size:12px;">Agrega tus deudas para ver esta proyección.</p>';
+    el.innerHTML = `<p class="muted" style="font-size:12px;">Falta definir el monto o el pago mensual de la deuda vinculada a una cuenta de rendimiento: <b>${proj.faltantes.join(', ')}</b>.</p>`;
+    return;
+  }
+  if (proj.sinVinculo) {
+    el.innerHTML = `
+      <div class="amount sm green">${fmtMoney(proj.totalFinal)}</div>
+      <p class="muted" style="font-size:12px;margin-top:2px;">generando ~${fmtMoney(proj.gananciaDiariaFinal)}/día (~${fmtMoney(proj.gananciaMensualFinal)}/mes)</p>
+      <p class="muted" style="font-size:11px;margin-top:6px;">Ninguna de tus deudas está vinculada a una cuenta de rendimiento, así que pagarlas no cambia lo que generan tus cuentas — esto es lo mismo que generan hoy.</p>
+    `;
     return;
   }
   el.innerHTML = `
     <div class="amount sm green">${fmtMoney(proj.totalFinal)}</div>
     <p class="muted" style="font-size:12px;margin-top:2px;">generando ~${fmtMoney(proj.gananciaDiariaFinal)}/día (~${fmtMoney(proj.gananciaMensualFinal)}/mes)</p>
-    <div class="link-badge" style="margin-top:8px;">📅 Deuda saldada el <b>${fmtDate(proj.fecha)}</b> (en ~${Math.round(proj.dias / 30)} meses), si sigues pagando lo mismo cada mes</div>
-    <p class="muted" style="font-size:11px;margin-top:6px;">Estimado con tus tasas y pagos actuales, sin depósitos ni retiros extra. En cuanto la deuda de Nu se salde, deja de restarse su pago mensual de esa cuenta.</p>
+    <div class="link-badge" style="margin-top:8px;">📅 Deuda(s) vinculada(s) saldada(s) el <b>${fmtDate(proj.fecha)}</b> (en ~${Math.round(proj.dias / 30)} meses), si sigues pagando lo mismo cada mes</div>
+    <p class="muted" style="font-size:11px;margin-top:6px;">Solo considera deudas vinculadas a una cuenta de rendimiento (hoy: Nu) — las demás no afectan lo que generan tus cuentas.</p>
   `;
 }
 
@@ -645,7 +694,12 @@ function renderZoneA() {
 }
 
 function accountTypeLabel(tipo) {
-  return { simple: 'Tasa simple', escalonado_predictivo: 'Escalonado + alerta', declining_vinculado: 'Vinculada a deuda', grupo_colector: 'Grupo colector' }[tipo] || tipo;
+  return { simple: 'Tasa simple', escalonado_predictivo: 'Escalonado + alerta', declining_vinculado: 'Vinculada a deuda', grupo_colector: 'Grupo colector', no_compuesto: 'Sin interés compuesto' }[tipo] || tipo;
+}
+
+// Nombres de las cuentas "no_compuesto" que depositan su rendimiento en `id`.
+function inflowSources(id, rendimientos) {
+  return Object.values(rendimientos || {}).filter((c) => c.tipo === 'no_compuesto' && c.cuentaDestinoId === id).map((c) => c.nombre);
 }
 
 function renderRendimientos() {
@@ -658,9 +712,9 @@ function renderRendimientos() {
     const card = document.createElement('div');
     card.className = 'card';
     const balance = rendimientoBalanceHoy(cuenta);
-    const proj30 = rendimientoProjectTotal(cuenta, 30);
-    const proj90 = rendimientoProjectTotal(cuenta, 90);
-    const proj365 = rendimientoProjectTotal(cuenta, 365);
+    const proj30 = rendimientoProjectTotal(id, cuenta, 30, state.rendimientos);
+    const proj90 = rendimientoProjectTotal(id, cuenta, 90, state.rendimientos);
+    const proj365 = rendimientoProjectTotal(id, cuenta, 365, state.rendimientos);
     const p30 = typeof proj30 === 'object' ? proj30.saldo : proj30;
     const p90 = typeof proj90 === 'object' ? proj90.saldo : proj90;
     const p365 = typeof proj365 === 'object' ? proj365.saldo : proj365;
@@ -704,13 +758,28 @@ function renderRendimientos() {
         '</tbody></table>';
     }
 
-    const topeProj = genericTopeProjection(cuenta);
+    if (cuenta.tipo === 'no_compuesto') {
+      const destino = cuenta.cuentaDestinoId ? state.rendimientos[cuenta.cuentaDestinoId] : null;
+      extraHtml += destino
+        ? `<div class="link-badge">🔁 No compone: su rendimiento se deposita automáticamente en <b>${destino.nombre}</b>, no se queda aquí.</div>`
+        : `<div class="link-badge">⚠️ Sin cuenta destino configurada: su rendimiento no se está moviendo a ningún lado todavía.</div>`;
+    }
+    const fuentes = inflowSources(id, state.rendimientos);
+    if (fuentes.length) {
+      extraHtml += `<div class="link-badge">📥 Recibe automáticamente el rendimiento de: <b>${fuentes.join(', ')}</b></div>`;
+    }
+
+    const topeProj = genericTopeProjection(id, cuenta);
     if (topeProj?.estado === 'alcanzado') {
       extraHtml += `<div class="link-badge">🔔 Ya llegó a tu tope de ${fmtMoney(topeProj.monto)}</div>`;
     } else if (topeProj?.estado === 'proyectado') {
       extraHtml += `<div class="link-badge">🔔 Vas a llegar a ${fmtMoney(topeProj.monto)} el <b>${fmtDate(topeProj.fechaProyectada)}</b> (${topeProj.diasRestantes} días) · alerta ${topeProj.diasAviso} días antes</div>`;
     } else if (topeProj?.estado === 'sin_crecimiento') {
       extraHtml += `<div class="link-badge">🔔 Tope configurado en ${fmtMoney(topeProj.monto)}, sin crecimiento suficiente para proyectar fecha</div>`;
+    }
+
+    if (cuenta.recordatorioAccion?.activo) {
+      extraHtml += `<div class="link-badge">📆 Recordatorio el día ${cuenta.recordatorioAccion.diaMes} de cada mes: <b>${cuenta.recordatorioAccion.nota || 'revisar esta cuenta'}</b></div>`;
     }
 
     card.innerHTML = `
@@ -730,7 +799,7 @@ function renderRendimientos() {
         <span>90 días: ${fmtMoney(p90)}</span>
         <span>365 días: ${fmtMoney(p365)}</span>
       </div>
-      <p class="muted" style="font-size:11px;margin-top:8px;">El saldo crece solo cada día a las 6am. "Actualizar saldo" es para correcciones manuales.</p>
+      <p class="muted" style="font-size:11px;margin-top:8px;">${cuenta.tipo === 'no_compuesto' ? 'Esta cuenta no acumula sola: su rendimiento se mueve a la cuenta destino cada día.' : 'El saldo crece solo cada día a las 6am. "Actualizar saldo" es para correcciones manuales.'}</p>
       <div class="btn-row" style="margin-top:6px;">
         <button class="btn sm" data-action="edit-rendimiento" data-id="${id}">Actualizar saldo</button>
         <button class="btn sm danger" data-action="delete-rendimiento" data-id="${id}">Eliminar</button>
@@ -863,6 +932,7 @@ function openRendimientoForm(id) {
         <option value="escalonado_predictivo">Escalonado con alerta predictiva</option>
         <option value="declining_vinculado">Vinculada a una deuda</option>
         <option value="grupo_colector">Grupo con cuenta colectora (Klar)</option>
+        <option value="no_compuesto">Sin interés compuesto (rendimiento se va a otra cuenta)</option>
       </select>
     </div>` : `<input type="hidden" id="f-tipo" value="${tipo}" /><input type="hidden" id="f-nombre" value="${cuenta.nombre}" />`}
     <div id="f-dynamic"></div>
@@ -874,6 +944,18 @@ function openRendimientoForm(id) {
     <div class="field">
       <label>Avisar con cuántos días de anticipación</label>
       <input id="f-tope-dias" type="number" min="1" max="30" value="${cuenta?.notificarTope?.diasAviso ?? 5}" />
+    </div>
+    <div class="divider"></div>
+    <div class="field">
+      <label><input type="checkbox" id="f-recordatorio-activo" ${cuenta?.recordatorioAccion?.activo ? 'checked' : ''} style="width:auto;vertical-align:middle;margin-right:6px;" />Recordatorio mensual de acción (ej. mover el rendimiento a otra cuenta)</label>
+    </div>
+    <div class="field">
+      <label>Día del mes</label>
+      <input id="f-recordatorio-dia" type="number" min="1" max="31" value="${cuenta?.recordatorioAccion?.diaMes ?? ''}" />
+    </div>
+    <div class="field">
+      <label>Qué hacer</label>
+      <input id="f-recordatorio-nota" placeholder="Ej. Mover el rendimiento de Finsus a Klar" value="${cuenta?.recordatorioAccion?.nota || ''}" />
     </div>
     <div class="btn-row" style="margin-top:12px;">
       <button class="btn primary block" id="f-save">Guardar</button>
@@ -904,6 +986,14 @@ function openRendimientoForm(id) {
         <div class="field"><label>Tasa anual (%)</label><input id="f-tasa" type="number" step="0.01" value="${cuenta ? cuenta.tasaAnual * 100 : ''}" /></div>
         <div class="field"><label>Deuda vinculada</label><select id="f-deuda-link"><option value="">— ninguna —</option>${deudaOptions}</select></div>
         <div class="field"><label>Día de ciclo (informativo)</label><input id="f-ciclo" type="number" min="1" max="31" value="${cuenta?.cicloDia ?? ''}" /></div>
+      `;
+    } else if (t === 'no_compuesto') {
+      const destinoOptions = Object.entries(state.rendimientos).filter(([id2]) => id2 !== id).map(([id2, r]) => `<option value="${id2}" ${cuenta?.cuentaDestinoId === id2 ? 'selected' : ''}>${r.nombre}</option>`).join('');
+      dyn.innerHTML = `
+        <div class="field"><label>Saldo actual</label><input id="f-saldo" type="number" step="0.01" value="${cuenta?.saldo ?? ''}" /></div>
+        <div class="field"><label>Tasa anual (%)</label><input id="f-tasa" type="number" step="0.01" value="${cuenta ? cuenta.tasaAnual * 100 : ''}" /></div>
+        <div class="field"><label>Cuenta a la que se va el rendimiento</label><select id="f-destino-link"><option value="">— ninguna —</option>${destinoOptions}</select></div>
+        <p class="muted" style="font-size:11px;">Esta cuenta no acumula interés compuesto: lo que genera cada día se suma al saldo de la cuenta destino, no al suyo.</p>
       `;
     } else {
       dyn.innerHTML = `
@@ -947,9 +1037,23 @@ function openRendimientoForm(id) {
       if (link) payload.deudaVinculadaId = link;
       const ciclo = modal.querySelector('#f-ciclo').value;
       if (ciclo) payload.cicloDia = parseInt(ciclo, 10);
+    } else if (t === 'no_compuesto') {
+      payload.saldo = parseFloat(modal.querySelector('#f-saldo').value) || 0;
+      payload.tasaAnual = (parseFloat(modal.querySelector('#f-tasa').value) || 0) / 100;
+      const destino = modal.querySelector('#f-destino-link').value;
+      payload.cuentaDestinoId = destino || null;
     } else {
       payload.saldo = parseFloat(modal.querySelector('#f-saldo').value) || 0;
       payload.tasaAnual = (parseFloat(modal.querySelector('#f-tasa').value) || 0) / 100;
+    }
+
+    const recordatorioActivo = modal.querySelector('#f-recordatorio-activo').checked;
+    const recordatorioDia = modal.querySelector('#f-recordatorio-dia').value;
+    const recordatorioNota = modal.querySelector('#f-recordatorio-nota').value.trim();
+    if (recordatorioActivo && recordatorioDia) {
+      payload.recordatorioAccion = { activo: true, diaMes: parseInt(recordatorioDia, 10), nota: recordatorioNota };
+    } else {
+      payload.recordatorioAccion = null;
     }
 
     const topeActivo = modal.querySelector('#f-tope-activo').checked;
