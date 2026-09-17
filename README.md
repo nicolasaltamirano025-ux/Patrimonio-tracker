@@ -119,6 +119,13 @@ Arriba del saldo de cada tarjeta se ve "+$X hoy" (o "genera $X hoy" en una cuent
 ## Tasa anualizada real
 Junto a la etiqueta "Rendimientos" en la Zona A hay un pill con el % anual real que está dando tu dinero HOY: `(lo que generas hoy × 365 × 100) / total en rendimientos`. No es el promedio de las tasas nominales de tus cuentas — es cuánto rinde tu dinero de verdad, ponderado por cuánto tienes en cada cuenta (si tienes más dinero en una cuenta con tasa baja, este % se acerca más a esa tasa que a un simple promedio de todas).
 
+## Gráfica de evolución del patrimonio
+- Un snapshot por día (si hay varias escrituras el mismo día, se queda la más reciente).
+- Fila de rendimiento a 7 / 30 / 90 días y total, con monto y % — se calcula contra el registro disponible más cercano a esa fecha; si no hay suficiente historial todavía, dice "sin datos" en vez de inventar un número.
+- Eje Y con los montos máximo y mínimo del rango visible; eje X con la fecha del primer y último punto.
+- Toca/haz clic en cualquier punto de la línea para ver su detalle abajo de la gráfica: fecha, patrimonio neto de ese día, diferencia contra el día anterior, y los movimientos registrados ese día (pagos, actualizaciones de saldo, etc.).
+- El pill de arriba a la derecha de "Patrimonio neto" ahora muestra la ganancia acumulada (la misma de la tarjeta de Ganancias), no un delta día a día que se veía en $0.00 la mayoría del tiempo.
+
 ## Contador de ganancias
 La tarjeta "Ganancia acumulada" arranca en $0 desde que se creó, y sube sola un día a la vez: cada vez que la función hace crecer los saldos, suma ese mismo monto al acumulado. El botón "Reiniciar" en esa tarjeta lo regresa a $0 en cualquier momento — no toca tus saldos ni el crecimiento diario, solo el contador (están desacoplados a propósito: `patrimonio/crecimiento` es la guardia real de "ya crecieron los saldos hoy", `patrimonio/ganancias` es solo el contador visible y reiniciable). "Hoy vas generando" es una estimación en vivo (se recalcula cada vez que abres la app) de lo que se va a acreditar cuando corra la función.
 

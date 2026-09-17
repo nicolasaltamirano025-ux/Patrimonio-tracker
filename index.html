@@ -164,8 +164,9 @@
 
     <div class="card">
       <h2>Evolución del patrimonio</h2>
-      <canvas id="chart-canvas" height="140"></canvas>
-      <p class="muted" style="font-size:11px;margin-top:6px;">Últimos registros de patrimonio neto</p>
+      <div class="row" id="chart-periods" style="gap:6px;margin:8px 0 4px;flex-wrap:wrap;justify-content:flex-start;"></div>
+      <canvas id="chart-canvas" height="160" style="cursor:pointer;"></canvas>
+      <div id="chart-detail" class="muted" style="font-size:12px;margin-top:8px;min-height:16px;">Toca un punto de la gráfica para ver el detalle de ese día.</div>
     </div>
   </div>
 
@@ -459,8 +460,8 @@ function initApp() {
 
   db.ref('patrimonio/rendimientos').on('value', (snap) => { state.rendimientos = snap.val() || {}; render(); });
   db.ref('patrimonio/deudas').on('value', (snap) => { state.deudas = snap.val() || {}; render(); });
-  db.ref('patrimonio/movimientos').limitToLast(50).on('value', (snap) => { state.movimientos = snap.val() || {}; render(); });
-  db.ref('patrimonio/snapshots').limitToLast(60).on('value', (snap) => { state.snapshots = snap.val() || {}; render(); });
+  db.ref('patrimonio/movimientos').limitToLast(150).on('value', (snap) => { state.movimientos = snap.val() || {}; render(); });
+  db.ref('patrimonio/snapshots').limitToLast(120).on('value', (snap) => { state.snapshots = snap.val() || {}; render(); });
   db.ref('patrimonio/ganancias').on('value', (snap) => {
     if (snap.val()) { state.ganancias = snap.val(); render(); }
     else initGananciasTracker(); // primera vez: arranca el contador en ceros desde hoy
@@ -567,16 +568,12 @@ function renderZoneA() {
     ? `No incluye deuda(s) con monto pendiente de confirmar: ${pendientes.join(', ')}.`
     : '';
 
-  const snaps = Object.values(state.snapshots || {}).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  // El pill de arriba muestra la ganancia acumulada (la misma de la tarjeta de Ganancias),
+  // no la diferencia entre los últimos dos registros — así siempre hay algo que ver.
   const trendPill = document.getElementById('trend-pill');
-  if (snaps.length >= 2) {
-    const diff = snaps[snaps.length - 1].patrimonioNeto - snaps[snaps.length - 2].patrimonioNeto;
-    trendPill.textContent = (diff >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(diff));
-    trendPill.className = 'pill ' + (diff >= 0 ? 'green' : 'red');
-  } else {
-    trendPill.textContent = 'sin histórico';
-    trendPill.className = 'pill';
-  }
+  const acumulado = state.ganancias?.acumulado || 0;
+  trendPill.textContent = '▲ ' + fmtMoney(acumulado);
+  trendPill.className = 'pill green';
 
   recordSnapshot(totalRendimientos, totalDeudasConocidas);
 }
@@ -775,36 +772,160 @@ function renderHistorial() {
   }));
 }
 
+// Un snapshot por día: si hubo varias escrituras el mismo día (recalculos, correcciones),
+// nos quedamos con la más reciente en vez de graficar cada escritura intermedia.
+function dedupedSnapshots() {
+  const byDate = {};
+  for (const s of Object.values(state.snapshots || {})) {
+    if (!s.fecha) continue;
+    if (!byDate[s.fecha] || (s.ts || 0) > (byDate[s.fecha].ts || 0)) byDate[s.fecha] = s;
+  }
+  return Object.values(byDate).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+}
+
+// Cambio de patrimonio neto entre hoy y el punto disponible más cercano a hace N días
+// (sin pasarse de esa fecha). Si no hay historial que llegue tan atrás, regresa null.
+function computePeriodReturn(points, days) {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1];
+  const targetDate = new Date(addDays(last.fecha, -days) + 'T00:00:00');
+  let ref = null;
+  for (const p of points) {
+    if (new Date(p.fecha + 'T00:00:00') <= targetDate) ref = p;
+  }
+  if (!ref || ref === last) return null;
+  const diff = last.patrimonioNeto - ref.patrimonioNeto;
+  const pct = ref.patrimonioNeto !== 0 ? (diff / Math.abs(ref.patrimonioNeto)) * 100 : null;
+  return { diff, pct };
+}
+
+function renderChartPeriods(points) {
+  const el = document.getElementById('chart-periods');
+  if (points.length < 2) { el.innerHTML = ''; return; }
+  const pillsHtml = [7, 30, 90].map((days) => {
+    const r = computePeriodReturn(points, days);
+    if (!r) return `<span class="pill">${days}d: sin datos</span>`;
+    const cls = r.diff >= 0 ? 'green' : 'red';
+    const pctTxt = r.pct !== null ? ` (${r.pct >= 0 ? '+' : ''}${r.pct.toFixed(1)}%)` : '';
+    return `<span class="pill ${cls}">${days}d: ${r.diff >= 0 ? '+' : '-'}${fmtMoney(Math.abs(r.diff))}${pctTxt}</span>`;
+  });
+  const first = points[0], last = points[points.length - 1];
+  const totalDiff = last.patrimonioNeto - first.patrimonioNeto;
+  pillsHtml.push(`<span class="pill ${totalDiff >= 0 ? 'green' : 'red'}">Total: ${totalDiff >= 0 ? '+' : '-'}${fmtMoney(Math.abs(totalDiff))}</span>`);
+  el.innerHTML = pillsHtml.join('');
+}
+
+function showChartDetail(points, idx) {
+  const el = document.getElementById('chart-detail');
+  const point = points[idx];
+  const prev = points[idx - 1];
+  const diff = prev ? point.patrimonioNeto - prev.patrimonioNeto : null;
+  const movs = Object.values(state.movimientos || {}).filter((m) => m.fecha === point.fecha);
+  let html = `<b>${fmtDate(point.fecha)}</b> — Patrimonio neto: <b>${fmtMoney(point.patrimonioNeto)}</b>`;
+  if (diff !== null) {
+    html += ` <span style="color:${diff >= 0 ? 'var(--green)' : 'var(--red)'};">(${diff >= 0 ? '+' : ''}${fmtMoney(diff)} vs día anterior)</span>`;
+  }
+  html += `<br>Rendimientos: ${fmtMoney(point.totalRendimientos)} · Deudas: ${fmtMoney(point.totalDeudas)}`;
+  if (movs.length) {
+    html += '<div style="margin-top:4px;">Movimientos ese día:</div><ul style="margin:2px 0 0;padding-left:16px;">' +
+      movs.map((m) => `<li>${m.nombre || m.campo || 'Movimiento'}${m.nota ? ' — ' + m.nota : ''}</li>`).join('') + '</ul>';
+  }
+  el.innerHTML = html;
+}
+
+let chartGeometry = null;
+let chartSelectedIndex = null;
+let chartClickBound = false;
+
+function bindChartClickOnce() {
+  if (chartClickBound) return;
+  chartClickBound = true;
+  const canvas = document.getElementById('chart-canvas');
+  canvas.addEventListener('click', (evt) => {
+    if (!chartGeometry) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const { points, padLeft, xStep } = chartGeometry;
+    let idx = Math.round((x - padLeft) / (xStep || 1));
+    idx = Math.max(0, Math.min(points.length - 1, idx));
+    chartSelectedIndex = idx;
+    renderChart();
+    showChartDetail(points, idx);
+  });
+}
+
 function renderChart() {
   const canvas = document.getElementById('chart-canvas');
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const cssWidth = canvas.clientWidth || 320;
-  const cssHeight = 140;
+  const cssHeight = 160;
   canvas.width = cssWidth * dpr; canvas.height = cssHeight * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-  const points = Object.values(state.snapshots || {}).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  const points = dedupedSnapshots();
+  renderChartPeriods(points);
+  bindChartClickOnce();
+
   if (points.length < 2) {
     ctx.fillStyle = '#8FA0C2'; ctx.font = '12px sans-serif';
     ctx.fillText('Necesitas al menos 2 registros para graficar', 8, cssHeight / 2);
+    chartGeometry = null;
     return;
   }
-  const values = points.map(p => p.patrimonioNeto);
+
+  const values = points.map((p) => p.patrimonioNeto);
   const min = Math.min(...values), max = Math.max(...values);
-  const pad = 10;
-  const xStep = (cssWidth - pad * 2) / (points.length - 1);
-  const yFor = (v) => {
-    if (max === min) return cssHeight / 2;
-    return cssHeight - pad - ((v - min) / (max - min)) * (cssHeight - pad * 2);
-  };
+  const padLeft = 8, padRight = 8, padTop = 16, padBottom = 30;
+  const plotW = cssWidth - padLeft - padRight;
+  const plotH = cssHeight - padTop - padBottom;
+  const xStep = plotW / (points.length - 1);
+  const yFor = (v) => (max === min ? padTop + plotH / 2 : padTop + plotH - ((v - min) / (max - min)) * plotH);
+  chartGeometry = { points, padLeft, xStep, cssWidth, cssHeight };
+
+  ctx.strokeStyle = 'rgba(143,160,194,0.15)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padLeft, padTop); ctx.lineTo(cssWidth - padRight, padTop); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(padLeft, padTop + plotH); ctx.lineTo(cssWidth - padRight, padTop + plotH); ctx.stroke();
+  ctx.fillStyle = '#8FA0C2'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(fmtMoney(max), padLeft, padTop - 4);
+  ctx.fillText(fmtMoney(min), padLeft, padTop + plotH + 12);
+
+  const grad = ctx.createLinearGradient(0, padTop, 0, padTop + plotH);
+  grad.addColorStop(0, 'rgba(61,220,151,0.25)');
+  grad.addColorStop(1, 'rgba(61,220,151,0)');
   ctx.beginPath();
   points.forEach((p, i) => {
-    const x = pad + i * xStep, y = yFor(p.patrimonioNeto);
+    const x = padLeft + i * xStep, y = yFor(p.patrimonioNeto);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(padLeft + (points.length - 1) * xStep, padTop + plotH);
+  ctx.lineTo(padLeft, padTop + plotH);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = padLeft + i * xStep, y = yFor(p.patrimonioNeto);
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   });
   ctx.strokeStyle = '#3DDC97'; ctx.lineWidth = 2; ctx.stroke();
+
+  points.forEach((p, i) => {
+    const x = padLeft + i * xStep, y = yFor(p.patrimonioNeto);
+    const selected = i === chartSelectedIndex;
+    ctx.beginPath();
+    ctx.arc(x, y, selected ? 4 : 2, 0, Math.PI * 2);
+    ctx.fillStyle = selected ? '#E8B84B' : '#3DDC97';
+    ctx.fill();
+  });
+
+  ctx.fillStyle = '#8FA0C2'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(fmtDate(points[0].fecha), padLeft, cssHeight - 4);
+  ctx.textAlign = 'right';
+  ctx.fillText(fmtDate(points[points.length - 1].fecha), cssWidth - padRight, cssHeight - 4);
 }
 
 /* ========================= CRUD: RENDIMIENTOS =========================== */
