@@ -119,7 +119,7 @@
     <div class="divider"></div>
     <div class="row">
       <div>
-        <div class="muted" style="font-size:12px;">Rendimientos</div>
+        <div class="muted" style="font-size:12px;">Rendimientos <span class="pill green" id="rendimiento-anual" style="margin-left:4px;"></span></div>
         <div class="amount sm green" id="total-rendimientos">—</div>
       </div>
       <div style="text-align:right;">
@@ -558,7 +558,11 @@ function renderZoneA() {
   document.getElementById('total-rendimientos').textContent = fmtMoney(totalRendimientos);
   document.getElementById('total-deudas').textContent = fmtMoney(totalDeudasConocidas);
   document.getElementById('patrimonio-neto').textContent = fmtMoney(totalRendimientos - totalDeudasConocidas);
-  document.getElementById('patrimonio-generando').textContent = `Generando ~${fmtMoney(totalDailyGain(state.rendimientos))} hoy`;
+  const gananciaHoy = totalDailyGain(state.rendimientos);
+  document.getElementById('patrimonio-generando').textContent = `Generando ~${fmtMoney(gananciaHoy)} hoy`;
+  // Tasa anualizada real: lo que se está generando HOY, llevado a un año, como % del total en rendimientos.
+  const tasaAnualizada = totalRendimientos > 0 ? (gananciaHoy * 365 * 100) / totalRendimientos : 0;
+  document.getElementById('rendimiento-anual').textContent = totalRendimientos > 0 ? `${tasaAnualizada.toFixed(2)}% anual` : '';
   document.getElementById('pending-note').textContent = pendientes.length
     ? `No incluye deuda(s) con monto pendiente de confirmar: ${pendientes.join(', ')}.`
     : '';
