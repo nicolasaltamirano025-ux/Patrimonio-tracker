@@ -115,6 +115,7 @@
       <span id="trend-pill" class="pill"></span>
     </div>
     <div class="amount" id="patrimonio-neto">—</div>
+    <div class="muted" id="patrimonio-generando" style="font-size:12px;margin-top:2px;"></div>
     <div class="divider"></div>
     <div class="row">
       <div>
@@ -145,12 +146,6 @@
       </div>
     </div>
     <p class="muted" style="font-size:11px;margin-top:8px;">Se acredita solo, todos los días a las 6am hora CDMX, con base en tus saldos y tasas actuales.</p>
-  </div>
-
-  <!-- RENDIMIENTO SIN DEUDA -->
-  <div class="card" id="zone-sin-deuda">
-    <span class="muted" style="font-size:12px;">RENDIMIENTO CUANDO TERMINES DE PAGAR TU DEUDA</span>
-    <div id="sin-deuda-content" style="margin-top:8px;"></div>
   </div>
 
   <div class="tabs">
@@ -453,88 +448,6 @@ function rendimientoProjectTotal(id, cuenta, days, rendimientosMap) {
   return saldo;
 }
 
-// Le suma a CADA cuenta de un set simulado su interés de un día (muta el objeto).
-// Misma lógica que computeDailyGrowth() del lado servidor: en Klar, el interés de
-// las 3 subcuentas se deposita completo en la colectora; una cuenta "no_compuesto"
-// (ej. Finsus) nunca crece su propio saldo, todo lo que genera se deposita en su
-// cuentaDestinoId. Se calcula primero lo que genera CADA cuenta con el saldo de
-// inicio del día, y hasta el final se aplican los cambios — así un redireccionamiento
-// no se cuenta dos veces ni se pisa entre cuentas procesadas en distinto orden.
-function applyOneDayGrowth(rendSim) {
-  const generado = {};
-  for (const [id, cuenta] of Object.entries(rendSim)) {
-    if (cuenta.tipo !== 'grupo_colector') generado[id] = dailyGrowthForAccount(cuenta);
-  }
-  for (const cuenta of Object.values(rendSim)) {
-    if (cuenta.tipo !== 'grupo_colector') continue;
-    let interesTotal = 0;
-    for (const sub of Object.values(cuenta.cuentas || {})) interesTotal += (sub.saldo || 0) * ((sub.tasaAnual || 0) / 365);
-    const collectorId = Object.entries(cuenta.cuentas || {}).find(([, s]) => !s.destinoInteresId)?.[0];
-    if (collectorId) cuenta.cuentas[collectorId].saldo += interesTotal;
-  }
-  for (const [id, cuenta] of Object.entries(rendSim)) {
-    if (cuenta.tipo === 'grupo_colector') continue;
-    if (cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId && rendSim[cuenta.cuentaDestinoId]) {
-      const destino = rendSim[cuenta.cuentaDestinoId];
-      if (destino.tipo === 'grupo_colector') {
-        const collectorId = Object.entries(destino.cuentas || {}).find(([, s]) => !s.destinoInteresId)?.[0];
-        if (collectorId) destino.cuentas[collectorId].saldo += generado[id];
-      } else {
-        destino.saldo = (destino.saldo || 0) + generado[id];
-      }
-    } else {
-      cuenta.saldo = (cuenta.saldo || 0) + generado[id];
-    }
-  }
-}
-
-// Simula, día a día, cómo se van liquidando SOLO las deudas que están vinculadas a
-// una cuenta de rendimiento (ej. Nu) con su pago mensual, deteniendo ese retiro en
-// cuanto esa deuda específica llega a $0, mientras todas tus cuentas siguen
-// creciendo. Las demás deudas (sin vínculo a ninguna cuenta) no afectan este
-// cálculo — pagarlas o no, no cambia lo que generan tus rendimientos. Si alguna
-// deuda VINCULADA no tiene monto o pago mensual definido, lo dice en vez de adivinar.
-function projectDebtFreeRendimiento() {
-  const vinculadas = Object.entries(state.deudas).filter(([, d]) => d.cuentaRendimientoVinculadaId);
-  const faltantes = vinculadas.filter(([, d]) => d.montoPendiente || d.pagoMensualPendiente || !d.pagoMensual).map(([, d]) => d.institucion);
-  if (faltantes.length) return { disponible: false, faltantes };
-
-  if (!vinculadas.length) {
-    // Ninguna deuda está vinculada a una cuenta de rendimiento: pagar deuda no
-    // cambia nada en lo que generan tus cuentas — es simplemente lo de hoy.
-    const rendimientos = state.rendimientos;
-    const totalFinal = Object.values(rendimientos).reduce((s, c) => s + rendimientoBalanceHoy(c), 0);
-    const gananciaDiariaFinal = totalDailyGain(rendimientos);
-    return { disponible: true, sinVinculo: true, totalFinal, gananciaDiariaFinal, gananciaMensualFinal: gananciaDiariaFinal * 30 };
-  }
-
-  const deudaSaldos = {};
-  vinculadas.forEach(([id, d]) => { deudaSaldos[id] = d.montoTotal; });
-  const rendSim = JSON.parse(JSON.stringify(state.rendimientos));
-
-  const MAX_DIAS = 365 * 20; // resguardo: no proyectar más de 20 años
-  let dia = 0;
-  while (Object.values(deudaSaldos).some((v) => v > 0.5) && dia < MAX_DIAS) {
-    dia++;
-    applyOneDayGrowth(rendSim);
-    if (dia % 30 === 0) {
-      for (const [id, d] of vinculadas) {
-        if (deudaSaldos[id] > 0) {
-          deudaSaldos[id] = Math.max(0, deudaSaldos[id] - d.pagoMensual);
-          const cuentaLigada = rendSim[d.cuentaRendimientoVinculadaId];
-          if (cuentaLigada) cuentaLigada.saldo = Math.max(0, (cuentaLigada.saldo || 0) - d.pagoMensual);
-        }
-      }
-    }
-  }
-
-  if (dia >= MAX_DIAS) return { disponible: false, muyLargoPlazo: true };
-
-  const totalFinal = Object.values(rendSim).reduce((s, c) => s + rendimientoBalanceHoy(c), 0);
-  const gananciaDiariaFinal = totalDailyGain(rendSim);
-  return { disponible: true, dias: dia, fecha: addDays(todayISO(), dia), totalFinal, gananciaDiariaFinal, gananciaMensualFinal: gananciaDiariaFinal * 30 };
-}
-
 /* ============================ APP STATE ================================ */
 let state = { rendimientos: {}, deudas: {}, movimientos: {}, snapshots: {}, ganancias: null };
 let currentTab = 'rendimientos';
@@ -614,42 +527,12 @@ function resetGananciasTracker() {
 function render() {
   renderZoneA();
   renderGanancias();
-  renderSinDeuda();
   renderRendimientos();
   renderDeudas();
   renderHistorial();
   renderChart();
   const empty = Object.keys(state.rendimientos).length === 0 && Object.keys(state.deudas).length === 0;
   document.getElementById('seed-banner').classList.toggle('hidden', !empty);
-}
-
-function renderSinDeuda() {
-  const el = document.getElementById('sin-deuda-content');
-  if (!Object.keys(state.rendimientos).length) { el.innerHTML = '<p class="muted" style="font-size:12px;">Agrega tus cuentas de rendimiento para ver esta proyección.</p>'; return; }
-
-  const proj = projectDebtFreeRendimiento();
-  if (proj.muyLargoPlazo) {
-    el.innerHTML = '<p class="muted" style="font-size:12px;">Con tus pagos mensuales actuales, liquidar toda tu deuda tomaría más de 20 años — revisa tus montos de pago mensual.</p>';
-    return;
-  }
-  if (!proj.disponible) {
-    el.innerHTML = `<p class="muted" style="font-size:12px;">Falta definir el monto o el pago mensual de la deuda vinculada a una cuenta de rendimiento: <b>${proj.faltantes.join(', ')}</b>.</p>`;
-    return;
-  }
-  if (proj.sinVinculo) {
-    el.innerHTML = `
-      <div class="amount sm green">${fmtMoney(proj.totalFinal)}</div>
-      <p class="muted" style="font-size:12px;margin-top:2px;">generando ~${fmtMoney(proj.gananciaDiariaFinal)}/día (~${fmtMoney(proj.gananciaMensualFinal)}/mes)</p>
-      <p class="muted" style="font-size:11px;margin-top:6px;">Ninguna de tus deudas está vinculada a una cuenta de rendimiento, así que pagarlas no cambia lo que generan tus cuentas — esto es lo mismo que generan hoy.</p>
-    `;
-    return;
-  }
-  el.innerHTML = `
-    <div class="amount sm green">${fmtMoney(proj.totalFinal)}</div>
-    <p class="muted" style="font-size:12px;margin-top:2px;">generando ~${fmtMoney(proj.gananciaDiariaFinal)}/día (~${fmtMoney(proj.gananciaMensualFinal)}/mes)</p>
-    <div class="link-badge" style="margin-top:8px;">📅 Deuda(s) vinculada(s) saldada(s) el <b>${fmtDate(proj.fecha)}</b> (en ~${Math.round(proj.dias / 30)} meses), si sigues pagando lo mismo cada mes</div>
-    <p class="muted" style="font-size:11px;margin-top:6px;">Solo considera deudas vinculadas a una cuenta de rendimiento (hoy: Nu) — las demás no afectan lo que generan tus cuentas.</p>
-  `;
 }
 
 function renderGanancias() {
@@ -675,6 +558,7 @@ function renderZoneA() {
   document.getElementById('total-rendimientos').textContent = fmtMoney(totalRendimientos);
   document.getElementById('total-deudas').textContent = fmtMoney(totalDeudasConocidas);
   document.getElementById('patrimonio-neto').textContent = fmtMoney(totalRendimientos - totalDeudasConocidas);
+  document.getElementById('patrimonio-generando').textContent = `Generando ~${fmtMoney(totalDailyGain(state.rendimientos))} hoy`;
   document.getElementById('pending-note').textContent = pendientes.length
     ? `No incluye deuda(s) con monto pendiente de confirmar: ${pendientes.join(', ')}.`
     : '';
@@ -712,6 +596,7 @@ function renderRendimientos() {
     const card = document.createElement('div');
     card.className = 'card';
     const balance = rendimientoBalanceHoy(cuenta);
+    const generaHoy = dailyGrowthForAccount(cuenta) + dailyInflow(id, state.rendimientos);
     const proj30 = rendimientoProjectTotal(id, cuenta, 30, state.rendimientos);
     const proj90 = rendimientoProjectTotal(id, cuenta, 90, state.rendimientos);
     const proj365 = rendimientoProjectTotal(id, cuenta, 365, state.rendimientos);
@@ -789,6 +674,7 @@ function renderRendimientos() {
           <span class="pill blue">${accountTypeLabel(cuenta.tipo)}</span>
         </div>
         <div style="text-align:right;">
+          ${generaHoy > 0 ? `<div class="muted" style="font-size:11px;">${cuenta.tipo === 'no_compuesto' && cuenta.cuentaDestinoId ? 'genera ' : '+'}${fmtMoney(generaHoy)} hoy</div>` : ''}
           <div class="amount sm green">${fmtMoney(balance)}</div>
         </div>
       </div>
