@@ -14,7 +14,7 @@ App web independiente para ver en un solo lugar: cuentas de rendimiento en Méxi
 
 1. Ve a [console.firebase.google.com](https://console.firebase.google.com) → **Add project** → nómbralo `patrimonio-tracker`.
 2. **Build → Realtime Database → Create database** (modo *locked*, elige la región más cercana, ej. `us-central1`).
-3. Sube las reglas de este repo: pestaña **Rules**, pega el contenido de [`database.rules.json`](./database.rules.json) y publica. Esto exige `auth != null` para leer o escribir — nadie sin sesión puede tocar tus datos, aunque la URL de la base sea pública.
+3. Sube las reglas de este repo: pestaña **Rules**, pega el contenido de [`database.rules.json`](./database.rules.json) y publica. Esto exige `auth != null` para leer o escribir. **Importante**: estas son las reglas de arranque, no las finales — una vez que migres tus datos a tu propio usuario (ver sección **Multiusuario** más abajo), las reemplazas por [`database.rules.per-user.json`](./database.rules.per-user.json), que sí aísla los datos de cada usuario del resto.
 4. **Build → Authentication → Sign-in method** → habilita **Email/Password**.
 5. **Authentication → Users → Add user** → crea tu propio usuario (el correo/contraseña con los que vas a iniciar sesión en la app).
 6. **Project settings → General → Your apps → Web app (</>) ** → registra la app y copia el objeto `firebaseConfig`.
@@ -44,8 +44,8 @@ git push -u origin main
    | `FIREBASE_DB_URL` | tu Realtime Database URL, ej. `https://patrimonio-tracker-xxxx-default-rtdb.firebaseio.com` |
    | `RESEND_API_KEY` | tu API key de [resend.com](https://resend.com) |
    | `ALERT_FROM_EMAIL` | remitente verificado en Resend |
-   | `ALERT_TO_EMAIL` | `nicolasaltamirano025@gmail.com` |
-4. Deploy. La Netlify Function programada (`netlify/functions/daily-alerts.js`) corre sola todos los días a las 06:00 hora CDMX (`schedule: "0 12 * * *"` en UTC) — no necesitas Cloud Scheduler aparte, Netlify Scheduled Functions ya trae su propio cron.
+   | `MIGRATION_SECRET` | cualquier cadena larga que inventes — solo la usas una vez, para la migración inicial |
+4. Deploy. La Netlify Function programada (`netlify/functions/daily-alerts.js`) corre sola todos los días a las 06:00 hora CDMX (`schedule: "0 12 * * *"` en UTC) — no necesitas Cloud Scheduler aparte, Netlify Scheduled Functions ya trae su propio cron. Cada usuario recibe sus alertas en el correo con el que inició sesión (no hay una dirección fija de destino).
 
 ### Por qué Netlify Function + Resend (y no Firebase Cloud Functions)
 Firebase Cloud Functions con cron requiere el plan **Blaze** (pago por uso) solo para poder programar funciones. Netlify Scheduled Functions vienen incluidas en el plan gratuito y ya estás desplegando ahí, así que es la opción con menos piezas nuevas que aprender/pagar. Resend tiene una API mínima (un solo `fetch` a un endpoint) y un plan gratuito de sobra para ~10 correos/mes.
@@ -74,31 +74,68 @@ git push
 
 ---
 
+## Multiusuario
+
+Cada quien que inicia sesión ve y edita **únicamente sus propias** cuentas de rendimiento y deudas — es un patrimonio separado por persona, no uno compartido. Técnicamente, todo lo que antes vivía en `patrimonio/...` ahora vive en `patrimonio/{uid}/...`, donde `uid` es el ID de usuario que asigna Firebase Auth.
+
+### Crear cuenta y recuperar contraseña
+En la pantalla de login hay dos links: **"Crear cuenta"** y **"¿Olvidaste tu contraseña?"**.
+- **Crear cuenta** solo funciona para correos que tú hayas aprobado de antemano. La lista vive en `index.html`, en la constante `ALLOWED_SIGNUP_EMAILS` — para dar de alta a alguien nuevo, agrega su correo ahí, haz commit y push:
+  ```js
+  const ALLOWED_SIGNUP_EMAILS = [
+    'nicolasaltamirano025@gmail.com',
+    'nueva-persona@correo.com',
+  ];
+  ```
+  Si alguien intenta crear cuenta con un correo que no está en la lista, la app se lo dice y no deja seguir. Esto es un filtro del lado del cliente, no una regla de Firebase — adecuado para una URL privada que no está indexada en ningún lado, pero no es una barrera infranqueable contra alguien que inspeccione el código. Lo que sí protege tus datos de verdad son las Database Rules per-user (ver abajo): aunque alguien lograra crear una cuenta sin estar en la lista, solo tendría acceso a su propio árbol vacío, nunca al tuyo.
+- **¿Olvidaste tu contraseña?** manda un correo de recuperación estándar de Firebase Auth a la dirección que escribas — no requiere nada adicional de tu parte.
+
+### Migrar tus datos actuales (hazlo UNA sola vez, en este orden)
+Como ya tenías datos guardados en la ruta vieja (`patrimonio/rendimientos`, `patrimonio/deudas`, etc., sin usuario), necesitas moverlos a tu propio `patrimonio/{tu-uid}/...` antes de que las reglas nuevas entren en vigor — si cambias las reglas primero, esos datos viejos quedan inaccesibles (no se borran, pero la app ya no los puede leer).
+
+1. Despliega este código (ya lo hace Netlify solo al hacer push) — las reglas de Firebase **siguen siendo las viejas** (`database.rules.json`, `auth != null`) en este punto, eso es intencional.
+2. Entra a Netlify → Environment variables y confirma que `MIGRATION_SECRET` ya tiene un valor tuyo.
+3. Abre en el navegador (reemplaza con tus valores):
+   ```
+   https://TU-SITIO.netlify.app/.netlify/functions/migrate-user-data?email=nicolasaltamirano025@gmail.com&secret=TU_MIGRATION_SECRET
+   ```
+   Deberías ver algo como `{"ok":true,"uid":"...","migratedKeys":["rendimientos","deudas","movimientos","snapshots","ganancias","crecimiento"]}`.
+4. Entra a la app normal, inicia sesión, y confirma que ves tus cuentas, deudas y el historial de siempre — ahora están sirviéndose desde `patrimonio/{tu-uid}/...`.
+5. **Hasta que confirmes el paso 4**, no sigas al paso 6 — si algo no cuadra, tus datos viejos siguen intactos en la ruta original y puedes investigar sin prisa.
+6. En Firebase console → Realtime Database → **Rules**, reemplaza el contenido por el de [`database.rules.per-user.json`](./database.rules.per-user.json) y publica. A partir de aquí, cada usuario solo puede leer/escribir su propio `patrimonio/{su-uid}/...`.
+7. (Opcional) Una vez tranquilo con que todo migró bien, puedes borrar manualmente los nodos viejos `patrimonio/rendimientos`, `patrimonio/deudas`, etc. desde la consola de Firebase — ya no los usa nadie.
+
+Después de esto, agrega a la nueva persona a `ALLOWED_SIGNUP_EMAILS` (arriba) y pídele que entre a la app y toque "Crear cuenta" — va a arrancar con su patrimonio completamente vacío, listo para que capture sus propias cuentas y deudas.
+
+---
+
 ## Modelo de datos (Realtime Database)
 
 ```
 patrimonio/
-  rendimientos/
-    {id}/
-      tipo: "simple" | "escalonado_predictivo" | "declining_vinculado" | "grupo_colector" | "no_compuesto"
-      nombre, saldo, tasaAnual        # tipo simple / declining_vinculado / no_compuesto
-      tasas: [{hasta, tasaAnual}, {desde, tasaAnual|null, pendiente}]  # escalonado_predictivo
-      historialInteres: { {id}: {fecha, monto} }                       # escalonado_predictivo, solo afina la proyección
-      deudaVinculadaId, cicloDia                                       # declining_vinculado
-      cuentas: { c1: {...}, c2: {...}, c3: {...} }                     # grupo_colector
-      cuentaDestinoId                                                  # no_compuesto: a dónde se va su rendimiento
-      notificarTope: { activo, monto, diasAviso, notificadoLlegada }   # opcional, cualquier tipo
-      recordatorioAccion: { activo, diaMes, nota }                     # opcional, cualquier tipo
-  deudas/
-    {id}/
-      institucion, montoTotal, montoPendiente, pagoMensual, pagoMensualPendiente,
-      diaCorte, diaVencimiento, diaNotificacion, cuentaRendimientoVinculadaId, notas
-  movimientos/       # historial combinado, editable/eliminable
-  snapshots/          # {fecha, totalRendimientos, totalDeudas, patrimonioNeto} — uno por día, alimenta la gráfica y la tendencia
-  ganancias/          # { acumulado, resetTs, historial: {fecha: gananciaDelDia} } — reiniciable por el usuario
-  crecimiento/        # { ultimaFechaAplicada } — guardia interna, evita crecer los saldos dos veces el mismo día
-  alertsLog/{fecha}/{clave}: true   # evita reenviar la misma alerta el mismo día
+  {uid}/                 # un árbol completo por usuario (Firebase Auth uid) — ver sección Multiusuario
+    rendimientos/
+      {id}/
+        tipo: "simple" | "escalonado_predictivo" | "declining_vinculado" | "grupo_colector" | "no_compuesto"
+        nombre, saldo, tasaAnual        # tipo simple / declining_vinculado / no_compuesto
+        tasas: [{hasta, tasaAnual}, {desde, tasaAnual|null, pendiente}]  # escalonado_predictivo
+        historialInteres: { {id}: {fecha, monto} }                       # escalonado_predictivo, solo afina la proyección
+        deudaVinculadaId, cicloDia                                       # declining_vinculado
+        cuentas: { c1: {...}, c2: {...}, c3: {...} }                     # grupo_colector
+        cuentaDestinoId                                                  # no_compuesto: a dónde se va su rendimiento
+        notificarTope: { activo, monto, diasAviso, notificadoLlegada }   # opcional, cualquier tipo
+        recordatorioAccion: { activo, diaMes, nota }                     # opcional, cualquier tipo
+    deudas/
+      {id}/
+        institucion, montoTotal, montoPendiente, pagoMensual, pagoMensualPendiente,
+        diaCorte, diaVencimiento, diaNotificacion, cuentaRendimientoVinculadaId, notas
+    movimientos/       # historial combinado, editable/eliminable
+    snapshots/          # {fecha, totalRendimientos, totalDeudas, patrimonioNeto} — uno por día, alimenta la gráfica y la tendencia
+    ganancias/          # { acumulado, resetTs, historial: {fecha: gananciaDelDia} } — reiniciable por el usuario
+    crecimiento/        # { ultimaFechaAplicada } — guardia interna, evita crecer los saldos dos veces el mismo día
+    alertsLog/{fecha}/{clave}: true   # evita reenviar la misma alerta el mismo día
 ```
+
 
 ## Carga inicial de datos
 

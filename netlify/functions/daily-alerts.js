@@ -1,14 +1,17 @@
-// Netlify Scheduled Function (v2 syntax) — runs once a day and decides which
-// email alerts to send: (1) recordatorio general el día 7, (2) alertas de
-// vencimiento por deuda según `diaNotificacion`, (3) alerta predictiva de
-// Revolut 5 días antes de la fecha proyectada de llegar a su tope.
+// Netlify Scheduled Function (v2 syntax) — runs once a day, once PER USER
+// (each top-level key under patrimonio/ is a Firebase Auth uid), and decides
+// which email alerts to send to that user: (1) recordatorio general el día 7,
+// (2) alertas de vencimiento por deuda según `diaNotificacion`, (3) alerta
+// predictiva de Revolut 5 días antes de la fecha proyectada de llegar a su
+// tope, (4) alerta de tope personalizado por cuenta, (5) recordatorio mensual
+// de acción. Los correos se mandan al correo de Firebase Auth de cada quien,
+// no a una sola dirección fija.
 //
 // Required env vars (set in Netlify → Site settings → Environment variables):
 //   FIREBASE_SERVICE_ACCOUNT_B64  base64 of the Firebase service account JSON
 //   FIREBASE_DB_URL               e.g. https://xxx-default-rtdb.firebaseio.com
 //   RESEND_API_KEY                Resend API key
 //   ALERT_FROM_EMAIL              e.g. alerts@yourdomain.com (verified in Resend)
-//   ALERT_TO_EMAIL                where alerts are delivered
 
 import admin from 'firebase-admin';
 
@@ -38,6 +41,9 @@ function addDaysISO(dateISO, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Cada usuario tiene su propio árbol de datos bajo patrimonio/{uid}/...
+function uRoot(uid, path) { return 'patrimonio/' + uid + (path ? '/' + path : ''); }
+
 function movingAverage(historialInteres, windowDays = 7) {
   const entries = Object.values(historialInteres || {})
     .filter((e) => typeof e.monto === 'number')
@@ -57,7 +63,7 @@ function revolutAlertDate(cuenta) {
   return { fechaProyectada, fechaAlerta: addDaysISO(fechaProyectada, -5), tope };
 }
 
-async function sendEmail({ subject, html }) {
+async function sendEmail({ to, subject, html }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -66,7 +72,7 @@ async function sendEmail({ subject, html }) {
     },
     body: JSON.stringify({
       from: process.env.ALERT_FROM_EMAIL,
-      to: [process.env.ALERT_TO_EMAIL],
+      to: [to],
       subject,
       html,
     }),
@@ -172,9 +178,10 @@ function balanceHoy(cuenta) {
 // saldo: lo que genera se deposita en su cuentaDestinoId. Se calcula primero
 // lo que genera CADA cuenta con el saldo de inicio del día, y hasta el final
 // se aplican los cambios, para que un redireccionamiento no se cuente dos
-// veces. Devuelve los updates a escribir y las cuentas ya actualizadas (para
-// que las alertas de tope de este mismo día usen el saldo ya crecido).
-function computeDailyGrowth(rendimientos) {
+// veces. Devuelve los updates a escribir (ya con el prefijo patrimonio/{uid}/)
+// y las cuentas ya actualizadas (para que las alertas de este mismo día usen
+// el saldo ya crecido).
+function computeDailyGrowth(uid, rendimientos) {
   const rendimientosActualizados = {};
   let total = 0;
 
@@ -229,10 +236,10 @@ function computeDailyGrowth(rendimientos) {
   for (const [id, cuenta] of Object.entries(rendimientosActualizados)) {
     if (cuenta.tipo === 'grupo_colector') {
       for (const [subId, sub] of Object.entries(cuenta.cuentas || {})) {
-        updates[`patrimonio/rendimientos/${id}/cuentas/${subId}/saldo`] = sub.saldo;
+        updates[uRoot(uid, `rendimientos/${id}/cuentas/${subId}/saldo`)] = sub.saldo;
       }
     } else {
-      updates[`patrimonio/rendimientos/${id}/saldo`] = cuenta.saldo;
+      updates[uRoot(uid, `rendimientos/${id}/saldo`)] = cuenta.saldo;
     }
   }
   return { updates, total, rendimientosActualizados };
@@ -240,25 +247,25 @@ function computeDailyGrowth(rendimientos) {
 
 // Hace crecer los saldos y acredita el contador de ganancias, una sola vez al
 // día (idempotente si la función corre más de una vez el mismo día). La
-// guardia de "ya se aplicó hoy" vive en patrimonio/crecimiento, NO en
-// patrimonio/ganancias — así, si el usuario reinicia su contador de
+// guardia de "ya se aplicó hoy" vive en patrimonio/{uid}/crecimiento, NO en
+// patrimonio/{uid}/ganancias — así, si el usuario reinicia su contador de
 // ganancias a la mitad del día, no se salta el crecimiento de saldos de ese
 // día (son dos cosas independientes: una es tuya para reiniciar, la otra no).
-async function applyDailyGrowthAndGain(db, rendimientos, today) {
-  const crecimientoRef = db.ref('patrimonio/crecimiento');
+async function applyDailyGrowthAndGain(db, uid, rendimientos, today) {
+  const crecimientoRef = db.ref(uRoot(uid, 'crecimiento'));
   const crecimientoSnap = await crecimientoRef.once('value');
   const c = crecimientoSnap.val() || {};
   if (c.ultimaFechaAplicada === today) return rendimientos; // ya se aplicó hoy
 
-  const { updates, total, rendimientosActualizados } = computeDailyGrowth(rendimientos);
-  updates['patrimonio/crecimiento/ultimaFechaAplicada'] = today;
+  const { updates, total, rendimientosActualizados } = computeDailyGrowth(uid, rendimientos);
+  updates[uRoot(uid, 'crecimiento/ultimaFechaAplicada')] = today;
 
-  const gananciasSnap = await db.ref('patrimonio/ganancias').once('value');
+  const gananciasSnap = await db.ref(uRoot(uid, 'ganancias')).once('value');
   const g = gananciasSnap.val() || { acumulado: 0, resetTs: Date.now(), historial: {} };
-  updates['patrimonio/ganancias/acumulado'] = (g.acumulado || 0) + total;
-  updates[`patrimonio/ganancias/historial/${today}`] = total;
-  const movKey = db.ref('patrimonio/movimientos').push().key;
-  updates[`patrimonio/movimientos/${movKey}`] = {
+  updates[uRoot(uid, 'ganancias/acumulado')] = (g.acumulado || 0) + total;
+  updates[uRoot(uid, `ganancias/historial/${today}`)] = total;
+  const movKey = db.ref(uRoot(uid, 'movimientos')).push().key;
+  updates[uRoot(uid, `movimientos/${movKey}`)] = {
     ts: Date.now(), fecha: today, tipo: 'rendimiento', nombre: 'Crecimiento diario automático',
     nota: `+${fmtMoney(total)} repartido entre tus cuentas`,
   };
@@ -266,19 +273,15 @@ async function applyDailyGrowthAndGain(db, rendimientos, today) {
   return rendimientosActualizados;
 }
 
-export default async () => {
-  const app = initAdmin();
-  const db = app.database();
-  const today = mexicoCityToday();
-  const dayOfMonth = parseInt(today.slice(8, 10), 10);
-
+// Procesa un solo usuario: crece sus saldos, decide qué alertas le tocan hoy,
+// y se las manda a SU correo de Firebase Auth (no a una dirección fija).
+async function processUser(app, db, uid, today, dayOfMonth) {
   const [rendimientosSnap, deudasSnap] = await Promise.all([
-    db.ref('patrimonio/rendimientos').once('value'),
-    db.ref('patrimonio/deudas').once('value'),
+    db.ref(uRoot(uid, 'rendimientos')).once('value'),
+    db.ref(uRoot(uid, 'deudas')).once('value'),
   ]);
   const deudas = deudasSnap.val() || {};
-  // rendimientos ya crecidos con el interés de hoy (si no se había acreditado hoy todavía)
-  const rendimientos = await applyDailyGrowthAndGain(db, rendimientosSnap.val() || {}, today);
+  const rendimientos = await applyDailyGrowthAndGain(db, uid, rendimientosSnap.val() || {}, today);
 
   const alerts = [];
   const topeUpdates = {};
@@ -302,7 +305,7 @@ export default async () => {
     if (saldoActual >= conf.monto) {
       if (!conf.notificadoLlegada) {
         alerts.push(buildTopeReachedAlert(cuenta, id, conf.monto));
-        topeUpdates[`patrimonio/rendimientos/${id}/notificarTope/notificadoLlegada`] = true;
+        topeUpdates[uRoot(uid, `rendimientos/${id}/notificarTope/notificadoLlegada`)] = true;
       }
       continue;
     }
@@ -322,19 +325,50 @@ export default async () => {
 
   if (Object.keys(topeUpdates).length) await db.ref().update(topeUpdates);
 
-  const logRef = db.ref(`patrimonio/alertsLog/${today}`);
+  if (!alerts.length) return { evaluated: 0, sent: 0 };
+
+  let email;
+  try {
+    email = (await app.auth().getUser(uid)).email;
+  } catch {
+    return { evaluated: alerts.length, sent: 0, error: `No se encontró el usuario ${uid} en Firebase Auth` };
+  }
+  if (!email) return { evaluated: alerts.length, sent: 0, error: `El usuario ${uid} no tiene correo registrado` };
+
+  const logRef = db.ref(uRoot(uid, `alertsLog/${today}`));
   const logSnap = await logRef.once('value');
   const sentToday = logSnap.val() || {};
 
   let sent = 0;
   for (const alert of alerts) {
     if (sentToday[alert.key]) continue; // ya se envió hoy, evita duplicados si la función corre más de una vez
-    await sendEmail(alert);
+    await sendEmail({ to: email, subject: alert.subject, html: alert.html });
     await logRef.child(alert.key).set(true);
     sent += 1;
   }
 
-  return new Response(JSON.stringify({ ok: true, evaluated: alerts.length, sent, gananciaHoy: totalDailyGain(rendimientos) }), {
+  return { evaluated: alerts.length, sent };
+}
+
+export default async () => {
+  const app = initAdmin();
+  const db = app.database();
+  const today = mexicoCityToday();
+  const dayOfMonth = parseInt(today.slice(8, 10), 10);
+
+  const rootSnap = await db.ref('patrimonio').once('value');
+  const uids = Object.keys(rootSnap.val() || {});
+
+  const results = {};
+  for (const uid of uids) {
+    try {
+      results[uid] = await processUser(app, db, uid, today, dayOfMonth);
+    } catch (err) {
+      results[uid] = { error: err.message };
+    }
+  }
+
+  return new Response(JSON.stringify({ ok: true, users: uids.length, results }), {
     headers: { 'content-type': 'application/json' },
   });
 };

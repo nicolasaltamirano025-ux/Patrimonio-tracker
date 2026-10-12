@@ -87,18 +87,30 @@
   <div class="card stack">
     <div>
       <h1>Patrimonio Tracker</h1>
-      <p class="muted" style="font-size:13px;">Inicia sesión para ver tu patrimonio</p>
+      <p class="muted" style="font-size:13px;" id="auth-subtitle">Inicia sesión para ver tu patrimonio</p>
     </div>
     <div class="field">
       <label>Correo</label>
       <input id="login-email" type="email" autocomplete="username" />
     </div>
-    <div class="field">
+    <div class="field" id="login-password-field">
       <label>Contraseña</label>
       <input id="login-password" type="password" autocomplete="current-password" />
     </div>
+    <div class="field hidden" id="login-password-confirm-field">
+      <label>Confirmar contraseña</label>
+      <input id="login-password-confirm" type="password" autocomplete="new-password" />
+    </div>
     <button class="btn primary block" id="login-btn">Entrar</button>
+    <button class="btn primary block hidden" id="signup-btn">Crear cuenta</button>
+    <button class="btn primary block hidden" id="reset-btn">Enviar correo de recuperación</button>
     <p id="login-error" class="muted" style="color:var(--red);font-size:12px;"></p>
+    <p id="login-success" class="muted" style="color:var(--green);font-size:12px;"></p>
+    <div class="row" id="auth-links" style="font-size:12px;">
+      <button class="btn ghost sm" id="show-signup-btn">Crear cuenta</button>
+      <button class="btn ghost sm" id="show-forgot-btn">¿Olvidaste tu contraseña?</button>
+    </div>
+    <button class="btn ghost sm hidden" id="show-login-btn">← Volver a iniciar sesión</button>
   </div>
 </div>
 
@@ -236,6 +248,11 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000)
 const addDays = (dateISO, n) => { const d = new Date(dateISO + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const uid = () => db.ref().push().key;
 
+// Cada usuario tiene su propio árbol de datos, aislado del de los demás.
+// currentUid se fija al iniciar sesión; pRoot() arma la ruta con ese prefijo.
+let currentUid = null;
+function pRoot(path) { return 'patrimonio/' + currentUid + (path ? '/' + path : ''); }
+
 function toast(msg) {
   const root = document.getElementById('toast-root');
   const el = document.createElement('div');
@@ -249,16 +266,54 @@ function toast(msg) {
 const loginScreen = document.getElementById('login-screen');
 const appRoot = document.getElementById('app');
 
+// Lista blanca de correos autorizados a crear cuenta. Solo tú la editas (aquí,
+// en el código) — nadie más puede autorregistrarse aunque encuentre la URL.
+// Compáralo en minúsculas para no fallar por mayúsculas/minúsculas.
+const ALLOWED_SIGNUP_EMAILS = [
+  'nicolasaltamirano025@gmail.com',
+];
+
 auth.onAuthStateChanged((user) => {
   if (user) {
+    currentUid = user.uid;
     loginScreen.classList.add('hidden');
     appRoot.classList.remove('hidden');
     initApp();
   } else {
+    currentUid = null;
     appRoot.classList.add('hidden');
     loginScreen.classList.remove('hidden');
   }
 });
+
+function setAuthMode(mode) {
+  document.getElementById('login-error').textContent = '';
+  document.getElementById('login-success').textContent = '';
+  const subtitle = document.getElementById('auth-subtitle');
+  const passwordField = document.getElementById('login-password-field');
+  const confirmField = document.getElementById('login-password-confirm-field');
+  const loginBtn = document.getElementById('login-btn');
+  const signupBtn = document.getElementById('signup-btn');
+  const resetBtn = document.getElementById('reset-btn');
+  const links = document.getElementById('auth-links');
+  const backBtn = document.getElementById('show-login-btn');
+
+  passwordField.classList.toggle('hidden', mode === 'forgot');
+  confirmField.classList.toggle('hidden', mode !== 'signup');
+  loginBtn.classList.toggle('hidden', mode !== 'login');
+  signupBtn.classList.toggle('hidden', mode !== 'signup');
+  resetBtn.classList.toggle('hidden', mode !== 'forgot');
+  links.classList.toggle('hidden', mode !== 'login');
+  backBtn.classList.toggle('hidden', mode === 'login');
+
+  subtitle.textContent = mode === 'signup' ? 'Crea tu cuenta (solo correos autorizados)'
+    : mode === 'forgot' ? 'Te mandamos un correo para restablecerla'
+    : 'Inicia sesión para ver tu patrimonio';
+}
+
+document.getElementById('show-signup-btn').addEventListener('click', () => setAuthMode('signup'));
+document.getElementById('show-forgot-btn').addEventListener('click', () => setAuthMode('forgot'));
+document.getElementById('show-login-btn').addEventListener('click', () => setAuthMode('login'));
 
 document.getElementById('login-btn').addEventListener('click', async () => {
   const email = document.getElementById('login-email').value.trim();
@@ -272,7 +327,51 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('logout-btn').addEventListener('click', () => auth.signOut());
+document.getElementById('signup-btn').addEventListener('click', async () => {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const confirm = document.getElementById('login-password-confirm').value;
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  if (!ALLOWED_SIGNUP_EMAILS.includes(email.toLowerCase())) {
+    errEl.textContent = 'Este correo no está autorizado para crear una cuenta.';
+    return;
+  }
+  if (password.length < 6) {
+    errEl.textContent = 'La contraseña debe tener al menos 6 caracteres.';
+    return;
+  }
+  if (password !== confirm) {
+    errEl.textContent = 'Las contraseñas no coinciden.';
+    return;
+  }
+  try {
+    await auth.createUserWithEmailAndPassword(email, password);
+    // onAuthStateChanged ya detecta la sesión nueva y entra solo a la app.
+  } catch (e) {
+    errEl.textContent = 'No se pudo crear la cuenta: ' + e.message;
+  }
+});
+
+document.getElementById('reset-btn').addEventListener('click', async () => {
+  const email = document.getElementById('login-email').value.trim();
+  const errEl = document.getElementById('login-error');
+  const okEl = document.getElementById('login-success');
+  errEl.textContent = '';
+  okEl.textContent = '';
+  if (!email) { errEl.textContent = 'Escribe tu correo arriba primero.'; return; }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    okEl.textContent = 'Listo, revisa tu correo (y spam) para restablecer tu contraseña.';
+  } catch (e) {
+    errEl.textContent = 'No se pudo enviar el correo: ' + e.message;
+  }
+});
+
+document.getElementById('logout-btn').addEventListener('click', async () => {
+  await auth.signOut();
+  location.reload(); // limpia todo el estado en memoria antes de que otra persona inicie sesión en este dispositivo
+});
 
 /* ======================= RENDIMIENTOS: CÁLCULO ========================
    Tipos soportados:
@@ -458,11 +557,11 @@ function initApp() {
   if (appInitialized) return;
   appInitialized = true;
 
-  db.ref('patrimonio/rendimientos').on('value', (snap) => { state.rendimientos = snap.val() || {}; render(); });
-  db.ref('patrimonio/deudas').on('value', (snap) => { state.deudas = snap.val() || {}; render(); });
-  db.ref('patrimonio/movimientos').limitToLast(150).on('value', (snap) => { state.movimientos = snap.val() || {}; render(); });
-  db.ref('patrimonio/snapshots').limitToLast(120).on('value', (snap) => { state.snapshots = snap.val() || {}; render(); });
-  db.ref('patrimonio/ganancias').on('value', (snap) => {
+  db.ref(pRoot('rendimientos')).on('value', (snap) => { state.rendimientos = snap.val() || {}; render(); });
+  db.ref(pRoot('deudas')).on('value', (snap) => { state.deudas = snap.val() || {}; render(); });
+  db.ref(pRoot('movimientos')).limitToLast(150).on('value', (snap) => { state.movimientos = snap.val() || {}; render(); });
+  db.ref(pRoot('snapshots')).limitToLast(120).on('value', (snap) => { state.snapshots = snap.val() || {}; render(); });
+  db.ref(pRoot('ganancias')).on('value', (snap) => {
     if (snap.val()) { state.ganancias = snap.val(); render(); }
     else initGananciasTracker(); // primera vez: arranca el contador en ceros desde hoy
   });
@@ -485,7 +584,7 @@ function initApp() {
 
 /* ============================ MOVEMENT LOG ============================= */
 function logMovimiento({ tipo, refId, nombre, campo, valorAnterior, valorNuevo, nota }) {
-  return db.ref('patrimonio/movimientos').push({
+  return db.ref(pRoot('movimientos')).push({
     ts: Date.now(), fecha: todayISO(), tipo, refId, nombre: nombre || '', campo, valorAnterior: valorAnterior ?? null,
     valorNuevo: valorNuevo ?? null, nota: nota || ''
   });
@@ -500,8 +599,8 @@ function recordSnapshot(totalRendimientos, totalDeudas) {
     return;
   }
   const payload = { fecha: today, totalRendimientos, totalDeudas, patrimonioNeto: totalRendimientos - totalDeudas, ts: Date.now() };
-  if (existing) db.ref('patrimonio/snapshots/' + existing[0]).update(payload);
-  else db.ref('patrimonio/snapshots').push(payload);
+  if (existing) db.ref(pRoot('snapshots/' + existing[0])).update(payload);
+  else db.ref(pRoot('snapshots')).push(payload);
 }
 
 /* ============================ GANANCIA DIARIA ===========================
@@ -515,7 +614,7 @@ function initGananciasTracker() {
   // tiene su propia guardia en el servidor) — reiniciar este contador solo pone
   // en $0 lo acumulado, tus cuentas siguen creciendo normal.
   const payload = { acumulado: 0, resetTs: Date.now(), historial: {} };
-  db.ref('patrimonio/ganancias').set(payload);
+  db.ref(pRoot('ganancias')).set(payload);
 }
 
 function resetGananciasTracker() {
@@ -768,7 +867,7 @@ function renderHistorial() {
     body.appendChild(tr);
   }
   body.querySelectorAll('button[data-id]').forEach(b => b.addEventListener('click', () => {
-    if (confirm('¿Eliminar este movimiento del historial?')) db.ref('patrimonio/movimientos/' + b.dataset.id).remove();
+    if (confirm('¿Eliminar este movimiento del historial?')) db.ref(pRoot('movimientos/' + b.dataset.id)).remove();
   }));
 }
 
@@ -1082,7 +1181,7 @@ function openRendimientoForm(id) {
 
     const targetId = id || uid();
     const prevBalance = cuenta ? rendimientoBalanceHoy(cuenta) : null;
-    db.ref('patrimonio/rendimientos/' + targetId).update(payload).then(() => {
+    db.ref(pRoot('rendimientos/' + targetId)).update(payload).then(() => {
       const newBalance = rendimientoBalanceHoy(payload);
       logMovimiento({ tipo: 'rendimiento', refId: targetId, nombre: payload.nombre, campo: 'saldo', valorAnterior: prevBalance, valorNuevo: newBalance });
       toast('Cuenta guardada');
@@ -1094,7 +1193,7 @@ function openRendimientoForm(id) {
 function deleteRendimiento(id) {
   const cuenta = state.rendimientos[id];
   if (!confirm(`¿Eliminar la cuenta ${cuenta.nombre}? Esto no se puede deshacer.`)) return;
-  db.ref('patrimonio/rendimientos/' + id).remove().then(() => {
+  db.ref(pRoot('rendimientos/' + id)).remove().then(() => {
     logMovimiento({ tipo: 'rendimiento', refId: id, nombre: cuenta.nombre, nota: 'Cuenta eliminada' });
     toast('Cuenta eliminada');
   });
@@ -1112,7 +1211,7 @@ function openInterestLogForm(id) {
     const fecha = modal.querySelector('#f-fecha').value;
     const monto = parseFloat(modal.querySelector('#f-monto').value);
     if (!fecha || Number.isNaN(monto)) { toast('Completa fecha y monto'); return; }
-    db.ref(`patrimonio/rendimientos/${id}/historialInteres/${uid()}`).set({ fecha, monto }).then(() => {
+    db.ref(pRoot(`rendimientos/${id}/historialInteres/${uid()}`)).set({ fecha, monto }).then(() => {
       logMovimiento({ tipo: 'rendimiento', refId: id, nombre: cuenta.nombre, nota: `Interés registrado: ${fmtMoney(monto)} (${fecha})` });
       toast('Interés registrado');
       closeModal();
@@ -1156,7 +1255,7 @@ function openDeudaForm(id) {
       notas: modal.querySelector('#f-notas').value.trim(),
     };
     const targetId = id || uid();
-    db.ref('patrimonio/deudas/' + targetId).update(payload).then(() => {
+    db.ref(pRoot('deudas/' + targetId)).update(payload).then(() => {
       logMovimiento({ tipo: 'deuda', refId: targetId, nombre: institucion, campo: 'monto', valorAnterior: deuda?.montoTotal ?? null, valorNuevo: payload.montoTotal });
       toast('Deuda guardada');
       closeModal();
@@ -1167,7 +1266,7 @@ function openDeudaForm(id) {
 function deleteDeuda(id) {
   const deuda = state.deudas[id];
   if (!confirm(`¿Eliminar la deuda ${deuda.institucion}?`)) return;
-  db.ref('patrimonio/deudas/' + id).remove().then(() => {
+  db.ref(pRoot('deudas/' + id)).remove().then(() => {
     logMovimiento({ tipo: 'deuda', refId: id, nombre: deuda.institucion, nota: 'Deuda eliminada' });
     toast('Deuda eliminada');
   });
@@ -1193,10 +1292,10 @@ function registrarPagoDeuda(id) {
     const reduce = modal.querySelector('#f-reduce').value === 'si';
     const updates = {};
     if (reduce && !deuda.montoPendiente) {
-      updates[`patrimonio/deudas/${id}/montoTotal`] = Math.max(0, (deuda.montoTotal || 0) - monto);
+      updates[pRoot(`deudas/${id}/montoTotal`)] = Math.max(0, (deuda.montoTotal || 0) - monto);
     }
     if (cuentaLigada) {
-      updates[`patrimonio/rendimientos/${deuda.cuentaRendimientoVinculadaId}/saldo`] = Math.max(0, (cuentaLigada.saldo || 0) - monto);
+      updates[pRoot(`rendimientos/${deuda.cuentaRendimientoVinculadaId}/saldo`)] = Math.max(0, (cuentaLigada.saldo || 0) - monto);
     }
     db.ref().update(updates).then(() => {
       logMovimiento({ tipo: 'pago_vinculado', refId: id, nombre: deuda.institucion, nota: `Pago registrado: ${fmtMoney(monto)}${cuentaLigada ? ` (restado de ${cuentaLigada.nombre})` : ''}` });
@@ -1275,7 +1374,7 @@ function seedInitialData() {
     claro: { institucion: 'Claro', montoTotal: null, montoPendiente: true, pagoMensual: null, pagoMensualPendiente: true, diaNotificacion: 8, notas: 'Monto y pago mensual pendientes de confirmar' },
   };
 
-  db.ref('patrimonio').update({ rendimientos, deudas }).then(() => {
+  db.ref(pRoot()).update({ rendimientos, deudas }).then(() => {
     toast('Datos iniciales cargados');
   }).catch(err => toast('Error al cargar: ' + err.message));
 }
