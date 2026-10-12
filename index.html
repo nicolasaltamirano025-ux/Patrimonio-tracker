@@ -87,30 +87,18 @@
   <div class="card stack">
     <div>
       <h1>Patrimonio Tracker</h1>
-      <p class="muted" style="font-size:13px;" id="auth-subtitle">Inicia sesión para ver tu patrimonio</p>
+      <p class="muted" style="font-size:13px;">Inicia sesión para ver tu patrimonio</p>
     </div>
     <div class="field">
       <label>Correo</label>
       <input id="login-email" type="email" autocomplete="username" />
     </div>
-    <div class="field" id="login-password-field">
+    <div class="field">
       <label>Contraseña</label>
       <input id="login-password" type="password" autocomplete="current-password" />
     </div>
-    <div class="field hidden" id="login-password-confirm-field">
-      <label>Confirmar contraseña</label>
-      <input id="login-password-confirm" type="password" autocomplete="new-password" />
-    </div>
     <button class="btn primary block" id="login-btn">Entrar</button>
-    <button class="btn primary block hidden" id="signup-btn">Crear cuenta</button>
-    <button class="btn primary block hidden" id="reset-btn">Enviar correo de recuperación</button>
     <p id="login-error" class="muted" style="color:var(--red);font-size:12px;"></p>
-    <p id="login-success" class="muted" style="color:var(--green);font-size:12px;"></p>
-    <div class="row" id="auth-links" style="font-size:12px;">
-      <button class="btn ghost sm" id="show-signup-btn">Crear cuenta</button>
-      <button class="btn ghost sm" id="show-forgot-btn">¿Olvidaste tu contraseña?</button>
-    </div>
-    <button class="btn ghost sm hidden" id="show-login-btn">← Volver a iniciar sesión</button>
   </div>
 </div>
 
@@ -266,13 +254,12 @@ function toast(msg) {
 const loginScreen = document.getElementById('login-screen');
 const appRoot = document.getElementById('app');
 
-// Lista blanca de correos autorizados a crear cuenta. Solo tú la editas (aquí,
-// en el código) — nadie más puede autorregistrarse aunque encuentre la URL.
-// Compáralo en minúsculas para no fallar por mayúsculas/minúsculas.
-const ALLOWED_SIGNUP_EMAILS = [
-  'nicolasaltamirano025@gmail.com',
-];
-
+// Nota: la app soporta datos separados por usuario (patrimonio/{uid}/...) y
+// netlify/functions/daily-alerts.js ya procesa a todos los usuarios que
+// existan en Firebase Auth. Por ahora el login es de un solo paso (sin
+// autorregistro) porque es uso personal, pero si en el futuro hace falta dar
+// de alta a alguien más, solo hay que crearle el usuario en Firebase console
+// (Authentication → Users → Add user) — el resto de la estructura ya está lista.
 auth.onAuthStateChanged((user) => {
   if (user) {
     currentUid = user.uid;
@@ -286,35 +273,6 @@ auth.onAuthStateChanged((user) => {
   }
 });
 
-function setAuthMode(mode) {
-  document.getElementById('login-error').textContent = '';
-  document.getElementById('login-success').textContent = '';
-  const subtitle = document.getElementById('auth-subtitle');
-  const passwordField = document.getElementById('login-password-field');
-  const confirmField = document.getElementById('login-password-confirm-field');
-  const loginBtn = document.getElementById('login-btn');
-  const signupBtn = document.getElementById('signup-btn');
-  const resetBtn = document.getElementById('reset-btn');
-  const links = document.getElementById('auth-links');
-  const backBtn = document.getElementById('show-login-btn');
-
-  passwordField.classList.toggle('hidden', mode === 'forgot');
-  confirmField.classList.toggle('hidden', mode !== 'signup');
-  loginBtn.classList.toggle('hidden', mode !== 'login');
-  signupBtn.classList.toggle('hidden', mode !== 'signup');
-  resetBtn.classList.toggle('hidden', mode !== 'forgot');
-  links.classList.toggle('hidden', mode !== 'login');
-  backBtn.classList.toggle('hidden', mode === 'login');
-
-  subtitle.textContent = mode === 'signup' ? 'Crea tu cuenta (solo correos autorizados)'
-    : mode === 'forgot' ? 'Te mandamos un correo para restablecerla'
-    : 'Inicia sesión para ver tu patrimonio';
-}
-
-document.getElementById('show-signup-btn').addEventListener('click', () => setAuthMode('signup'));
-document.getElementById('show-forgot-btn').addEventListener('click', () => setAuthMode('forgot'));
-document.getElementById('show-login-btn').addEventListener('click', () => setAuthMode('login'));
-
 document.getElementById('login-btn').addEventListener('click', async () => {
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
@@ -324,47 +282,6 @@ document.getElementById('login-btn').addEventListener('click', async () => {
     await auth.signInWithEmailAndPassword(email, password);
   } catch (e) {
     errEl.textContent = 'No se pudo iniciar sesión: ' + e.message;
-  }
-});
-
-document.getElementById('signup-btn').addEventListener('click', async () => {
-  const email = document.getElementById('login-email').value.trim();
-  const password = document.getElementById('login-password').value;
-  const confirm = document.getElementById('login-password-confirm').value;
-  const errEl = document.getElementById('login-error');
-  errEl.textContent = '';
-  if (!ALLOWED_SIGNUP_EMAILS.includes(email.toLowerCase())) {
-    errEl.textContent = 'Este correo no está autorizado para crear una cuenta.';
-    return;
-  }
-  if (password.length < 6) {
-    errEl.textContent = 'La contraseña debe tener al menos 6 caracteres.';
-    return;
-  }
-  if (password !== confirm) {
-    errEl.textContent = 'Las contraseñas no coinciden.';
-    return;
-  }
-  try {
-    await auth.createUserWithEmailAndPassword(email, password);
-    // onAuthStateChanged ya detecta la sesión nueva y entra solo a la app.
-  } catch (e) {
-    errEl.textContent = 'No se pudo crear la cuenta: ' + e.message;
-  }
-});
-
-document.getElementById('reset-btn').addEventListener('click', async () => {
-  const email = document.getElementById('login-email').value.trim();
-  const errEl = document.getElementById('login-error');
-  const okEl = document.getElementById('login-success');
-  errEl.textContent = '';
-  okEl.textContent = '';
-  if (!email) { errEl.textContent = 'Escribe tu correo arriba primero.'; return; }
-  try {
-    await auth.sendPasswordResetEmail(email);
-    okEl.textContent = 'Listo, revisa tu correo (y spam) para restablecer tu contraseña.';
-  } catch (e) {
-    errEl.textContent = 'No se pudo enviar el correo: ' + e.message;
   }
 });
 
