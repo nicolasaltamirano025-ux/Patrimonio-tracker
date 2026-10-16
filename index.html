@@ -434,9 +434,9 @@ function klarProjectBalances(cuentas, days, inflowDiario = 0) {
 
 function rendimientoBalanceHoy(cuenta) {
   if (cuenta.tipo === 'grupo_colector') {
-    return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + c.saldo, 0);
+    return Object.values(cuenta.cuentas || {}).reduce((s, c) => s + (c.saldo || 0), 0);
   }
-  return cuenta.saldo;
+  return cuenta.saldo || 0;
 }
 
 function rendimientoProjectTotal(id, cuenta, days, rendimientosMap) {
@@ -610,6 +610,7 @@ function renderRendimientos() {
   if (!entries.length) { list.innerHTML = '<div class="empty-state">Sin cuentas registradas</div>'; return; }
 
   for (const [id, cuenta] of entries) {
+    try {
     const card = document.createElement('div');
     card.className = 'card';
     const balance = rendimientoBalanceHoy(cuenta);
@@ -709,6 +710,22 @@ function renderRendimientos() {
       </div>
     `;
     list.appendChild(card);
+    } catch (err) {
+      // Que un dato raro en UNA cuenta no tumbe la lista entera — se ve esta
+      // tarjeta en vez de dejar toda la sección en blanco, y dice qué cuenta
+      // y qué error fue, para poder corregirlo.
+      const errCard = document.createElement('div');
+      errCard.className = 'card';
+      errCard.innerHTML = `
+        <h3>${cuenta?.nombre || id}</h3>
+        <p style="color:var(--red);font-size:12px;margin-top:6px;">No se pudo mostrar esta cuenta: ${err.message}</p>
+        <div class="btn-row" style="margin-top:10px;">
+          <button class="btn sm" data-action="edit-rendimiento" data-id="${id}">Actualizar saldo</button>
+          <button class="btn sm danger" data-action="delete-rendimiento" data-id="${id}">Eliminar</button>
+        </div>
+      `;
+      list.appendChild(errCard);
+    }
   }
 
   list.querySelectorAll('[data-action="edit-rendimiento"]').forEach(b => b.addEventListener('click', () => openRendimientoForm(b.dataset.id)));
