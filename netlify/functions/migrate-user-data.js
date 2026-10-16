@@ -54,9 +54,13 @@ export default async (req) => {
     return json({ ok: false, error: `No existe ningún usuario de Firebase Auth con ese correo: ${e.message}` }, 404);
   }
 
-  const existingSnap = await db.ref(`patrimonio/${uid}`).once('value');
+  // Ojo: NO revisamos patrimonio/{uid} completo, solo /rendimientos — la app
+  // ya crea sola un "ganancias" en blanco la primera vez que inicias sesión
+  // (antes de migrar), así que patrimonio/{uid} casi siempre "existe" aunque
+  // tus cuentas y deudas reales todavía no se hayan copiado.
+  const existingSnap = await db.ref(`patrimonio/${uid}/rendimientos`).once('value');
   if (existingSnap.exists()) {
-    return json({ ok: false, error: `patrimonio/${uid} ya tiene datos — no se sobreescribe nada por seguridad. Bórralo manualmente en Firebase si de verdad quieres repetir la migración.` }, 409);
+    return json({ ok: false, error: `patrimonio/${uid}/rendimientos ya tiene datos — no se sobreescribe nada por seguridad. Bórralo manualmente en Firebase si de verdad quieres repetir la migración.` }, 409);
   }
 
   const migrated = {};
@@ -69,7 +73,9 @@ export default async (req) => {
     return json({ ok: false, error: 'No se encontraron datos antiguos en patrimonio/rendimientos, patrimonio/deudas, etc. — no hay nada que migrar.' }, 404);
   }
 
-  await db.ref(`patrimonio/${uid}`).set(migrated);
+  // update() en vez de set(): así no borra el "ganancias" en blanco que ya se
+  // haya creado solo, solo lo reemplaza si el dato viejo real existía.
+  await db.ref(`patrimonio/${uid}`).update(migrated);
 
   return json({ ok: true, uid, migratedKeys: Object.keys(migrated) });
 };
